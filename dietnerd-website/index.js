@@ -444,6 +444,100 @@ const generatePDF = () => {
  * @param {string} userQuery - The user query to generate the search phrases for.
  * @return {Promise<void>} - A promise that resolves when the generation process is complete.
  */
+let attachmentExists = false;
+// Answering the question from the attachment
+async function refreshExistingAttachments() {
+    const existingAttachmentsElement = document.getElementById('existing-attachments');
+    const label = document.getElementById('attachment-label');
+    try {
+        const response = await fetch(`${baseURL}/list_attachments`);
+        const data = await response.json();
+        const documentNames = data.documents || [];
+        attachmentExists = documentNames.length > 0;
+        existingAttachmentsElement.innerHTML = documentNames.map(name => `
+            <span class="existing-attachment-item">
+                ${name}
+                <button type="button" class="existing-attachment-remove" data-filename="${name}">&#x2715;</button>
+            </span>
+        `).join('');
+        label.textContent = attachmentExists ? '' : 'No file attached';
+    } catch (err) {
+        console.log('Failed to fetch existing attachments:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    const fileInput = document.getElementById('attachment-file');
+    const existingAttachmentsElement = document.getElementById('existing-attachments');
+
+    refreshExistingAttachments();
+
+    fileInput.addEventListener('change', async function () {
+        if (fileInput.files.length > 0) {
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('attachment', file);
+            try {
+                await fetch(`${baseURL}/upload_attachment`, {
+                    method: 'POST',
+                    body: formData,
+                });
+                fileInput.value = '';
+                await refreshExistingAttachments();
+            } catch (err) {
+                console.log('Attachment upload failed:', err);
+            }
+        }
+    });
+
+    existingAttachmentsElement.addEventListener('click', async function (event) {
+        if (!event.target.matches('.existing-attachment-remove')) return;
+        const filename = event.target.dataset.filename;
+        try {
+            await fetch(`${baseURL}/remove_attachment?filename=${encodeURIComponent(filename)}`, {
+                method: 'DELETE',
+            });
+            await refreshExistingAttachments();
+        } catch (err) {
+            console.log('Attachment removal failed:', err);
+        }
+    });
+});
+
+/**
+ * Handles answering a question when a file is attached, bypassing session
+ * memory, the database lookup, and the similar-questions flow entirely.
+ *
+ * @param {string} question - The user's question.
+ * @return {Promise<void>} - A promise that resolves when the answer has been rendered.
+ */
+async function answerFromAttachment(question) {
+    const answerElement = document.getElementById('output');
+    const referencesElement = document.getElementById('references');
+    const resultsElement = document.getElementById('results');
+    const hintElement = document.querySelector('.hint');
+    const generatePdfButton = document.getElementById('generate-pdf-button');
+    const exampleQuestions = document.getElementById('example-questions');
+
+    resultsElement.style.display = 'flex';
+    hintElement.textContent = '';
+    exampleQuestions.classList.add('hidden');
+    answerElement.innerHTML = '<textarea readonly placeholder="Answer will load here, please wait. This may take a minute. Please do not close or refresh this page...."></textarea>';
+    referencesElement.innerHTML = `<label for="references" class="visually-hidden">References will appear here...</label><textarea id="references" readonly placeholder="References will appear here..."></textarea>`;
+
+    try {
+        const result = await runGeneration(question);
+        const answer = result.end_output;
+        answerElement.innerHTML = formatText(answer);
+        referencesElement.innerHTML = formatReferences(answer);
+        localStorage.setItem('rawOutput', answer);
+        generatePdfButton.classList.remove("hidden");
+    } catch (err) {
+        console.log(err);
+        answerElement.innerHTML = '<textarea readonly placeholder="Error generating the answer. Please try again."></textarea>';
+    }
+}
+
 async function runGeneration(userQuery) {
     const answerElement = document.getElementById('output');
     answerElement.innerText = 'Connecting...\n';
@@ -511,6 +605,7 @@ async function runGeneration(userQuery) {
  */
 document.getElementById('submit').addEventListener('click', async (event) => {
     const question = document.getElementById('question').value.trim();
+    const hasAttachment = attachmentExists;
     const answerElement = document.getElementById('output');
     const referencesElement = document.getElementById('references');
     const resultsElement = document.getElementById('results');
@@ -527,6 +622,11 @@ document.getElementById('submit').addEventListener('click', async (event) => {
     if (question) {
         answerElement.innerHTML = '';
         referencesElement.innerHTML = '';
+
+        if (hasAttachment) {
+            await answerFromAttachment(question);
+            return;
+        }
 
         // Check session memory only if there's history
         if (getSessionMemory().length === 0) {

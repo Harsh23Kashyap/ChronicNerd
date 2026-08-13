@@ -1,6 +1,6 @@
 from helper_functions import *
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from starlette.responses import JSONResponse
 
@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import uuid
 import json
+import threading
 from urllib.parse import unquote
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,6 +79,23 @@ async def sim_search(question:str):
 async def db_get_endpoint(query: str):
    decoded_query = unquote(query)
    result = await query_db_final(decoded_query)
+
+   # A cache hit is still a turn in the conversation, so record it the same way
+   # the full pipeline does — otherwise the next follow-up has no context for it.
+   cached_answer = None
+   if result:
+      try:
+         cached_answer = json.loads(result[0][1]).get("end_output")
+      except (IndexError, TypeError, ValueError) as e:
+         logging.info(f"[SESSION MEMORY] /db_get hit but answer could not be parsed: {e}")
+   if cached_answer:
+      append_session_memory({
+         "session_id": str(uuid.uuid4()),
+         "raw_question": decoded_query,
+         "standalone_question": decoded_query,
+         "answer": cached_answer
+      })
+
    return result
 
 @app.get("/check_valid/{question:str}")
@@ -94,27 +112,114 @@ async def check_valid(question:str):
     final_output = "good"
    return {"response" : final_output}
 
+MEMORY_FILE = "dietnerd_memory.json"
+_memory_lock = threading.Lock()
+
+def _load_memory():
+    try:
+        with open(MEMORY_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def get_session_memory():
+    return _load_memory().get("entries", [])
+
+def append_session_memory(entry):
+    with _memory_lock:
+        memory = _load_memory()
+        entries = memory.get("entries", [])
+        entries.append(entry)
+        memory["entries"] = entries
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(memory, f, indent=2)
+    logging.info(f"[SESSION MEMORY] Appended entry to {MEMORY_FILE} | total_entries={len(entries)}")
+
+def clear_session_memory():
+    with _memory_lock:
+        with open(MEMORY_FILE, "w") as f:
+            json.dump({"entries": []}, f, indent=2)
+    logging.info(f"[SESSION MEMORY] Cleared {MEMORY_FILE}")
+
+@app.get("/session_memory")
+async def read_session_memory():
+    entries = get_session_memory()
+    return JSONResponse({"entries": entries, "count": len(entries)})
+
+@app.delete("/session_memory")
+async def reset_session_memory():
+    clear_session_memory()
+    return JSONResponse({"status": "ok"})
+
 class SessionMemoryCheckModel(BaseModel):
     user_query: str
     session_memory: List[dict] = []
 
 @app.post("/check_session_memory")
 async def check_session_memory(body: SessionMemoryCheckModel):
-    history = body.session_memory
+    history = get_session_memory()
     logging.info(f"[SESSION MEMORY] /check_session_memory called | session_memory_empty={len(history) == 0} | history_length={len(history)}")
     if not history:
         logging.info("[SESSION MEMORY] Session memory is EMPTY — skipping check, going to normal flow")
         return JSONResponse({"answered": False, "answer": None})
     standalone_q = generate_standalone_question(body.user_query, history)
-    relevant_context = get_relevant_session_context(standalone_q, history)
-    can_answer, answer = try_answer_from_context(standalone_q, relevant_context)
+
+    # Answering from session memory is disabled — we only rewrite the question and
+    # always fall through to the full pipeline.
+    # relevant_context = get_relevant_session_context(standalone_q, history)
+    # can_answer, answer = try_answer_from_context(standalone_q, relevant_context)
+    can_answer, answer = False, None
+
     logging.info(f"[SESSION MEMORY] can_answer={can_answer} | standalone_q='{standalone_q}'")
     return JSONResponse({"answered": can_answer, "answer": answer, "standalone_question": standalone_q})
 
+@app.post("/upload_attachment")
+async def upload_attachment(attachment: UploadFile = File(...)):
+    file_bytes = await attachment.read()
+    attachment_text = extract_text_from_upload(file_bytes, attachment.filename)
+
+    try:
+        with open("user_documents.json", "r") as f:
+            user_documents = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        user_documents = {}
+
+    documents = user_documents.get("documents", {})
+    documents[attachment.filename] = attachment_text
+    user_documents["documents"] = documents
+
+    with open("user_documents.json", "w") as f:
+        json.dump(user_documents, f)
+    return JSONResponse({"status": "ok"})
+
+@app.get("/list_attachments")
+async def list_attachments():
+    try:
+        with open("user_documents.json", "r") as f:
+            user_documents = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        user_documents = {}
+    return JSONResponse({"documents": list(user_documents.get("documents", {}).keys())})
+
+@app.delete("/remove_attachment")
+async def remove_attachment(filename: str = Query(...)):
+    try:
+        with open("user_documents.json", "r") as f:
+            user_documents = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        user_documents = {}
+    documents = user_documents.get("documents", {})
+    documents.pop(filename, None)
+    user_documents["documents"] = documents
+    with open("user_documents.json", "w") as f:
+        json.dump(user_documents, f)
+    return JSONResponse({"status": "ok"})
+
 @app.post("/process_query")
-async def process_query(query: QueryModel, background_tasks: BackgroundTasks):
+async def process_query(background_tasks: BackgroundTasks, query: QueryModel):
     request_id = str(uuid.uuid4())
-    background_tasks.add_task(process_user_query, query.user_query, request_id, query.session_memory)
+    update_queues[request_id]  # create the queue before the SSE client connects
+    background_tasks.add_task(process_user_query, query.user_query, request_id)
     return JSONResponse({"session_id": request_id})
 
 @app.get("/sse")
@@ -124,8 +229,7 @@ async def sse(session_id: str = Query(default=None)):
     return EventSourceResponse(event_generator(session_id))
 
 async def event_generator(session_id: str):
-    queue = asyncio.Queue()
-    update_queues[session_id] = queue
+    queue = update_queues[session_id]
     try:
         while True:
             data = await queue.get()
@@ -137,9 +241,21 @@ async def event_generator(session_id: str):
     finally:
         del update_queues[session_id]
 
-def process_user_query(user_query, session_id, session_memory=None):
-    session_memory = session_memory or []
+def check_attachment_exists():
+    try:
+        with open("user_documents.json", "r") as f:
+            user_documents = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+    return bool(user_documents.get("documents"))
+
+def process_user_query(user_query, session_id):
+    session_memory = get_session_memory()
     raw_question = user_query
+
+    attachment_exist = check_attachment_exists()
+    if attachment_exist:
+        return process_attachment_query(user_query, session_id)
 
     if session_memory:
         user_query = generate_standalone_question(user_query, session_memory)
@@ -191,7 +307,7 @@ def process_user_query(user_query, session_id, session_memory=None):
 
     # Final Output
     start_output = time.time()
-    final_output = generate_final_response(all_relevant_articles, user_query)
+    final_output = generate_final_response(all_relevant_articles, user_query, None)
     end_output = time.time()
 
     poc_duration = end_poc - start_poc
@@ -241,14 +357,46 @@ def process_user_query(user_query, session_id, session_memory=None):
     return_obj["citations_obj"] = updated_citations
     return_obj["citations"] = citations
     
-    topics = extract_topics(raw_question, final_output)
-    return_obj["session_memory_entry"] = {
+    session_memory_entry = {
+        "session_id": session_id,
         "raw_question": raw_question,
         "standalone_question": user_query,
-        "answer": final_output,
-        "Topic of discussion": topics
+        "answer": final_output
     }
-    logging.info(f"[SESSION MEMORY] Entry created | topics={topics}")
+    append_session_memory(session_memory_entry)
+    return_obj["session_memory_entry"] = session_memory_entry
+    logging.info(f"[SESSION MEMORY] Entry created | session_id={session_id}")
+
+    loop.run_until_complete(send_update(session_id, return_obj))
+
+    return return_obj
+
+def process_attachment_query(user_query, session_id):
+    with open("user_documents.json", "r") as f:
+        user_documents = json.load(f)
+    documents = user_documents.get("documents", {})
+    document_text = "\n\n".join(f"Document: {name}\n{content}" for name, content in documents.items())
+    history = user_documents.get("history", [])
+
+    final_output = generate_attachment_response(document_text, history, user_query)
+
+    history.append({"question": user_query, "answer": final_output})
+    user_documents["history"] = history
+    with open("user_documents.json", "w") as f:
+        json.dump(user_documents, f)
+
+    return_obj = {
+        "end_output": final_output,
+        "relevant_articles": [],
+        "citations_obj": [],
+        "citations": [],
+        "session_memory_entry": {
+            "session_id": session_id,
+            "raw_question": user_query,
+            "standalone_question": user_query,
+            "answer": final_output
+        }
+    }
 
     loop.run_until_complete(send_update(session_id, return_obj))
 

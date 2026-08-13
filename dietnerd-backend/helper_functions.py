@@ -1539,13 +1539,36 @@ Please be aware that the insights provided by DietNerd may not fully take into c
 To find a local expert near you, use this website: https://www.eatright.org/find-a-nutrition-expert
 """
 
-def generate_final_response(all_relevant_articles, query):
+def extract_text_from_upload(file_bytes: bytes, filename: str) -> str:
+  """
+  Extracts plain text from uploaded file bytes. Supports PDF and text-based formats.
+  """
+  if filename.lower().endswith('.pdf'):
+    try:
+      doc = fitz.open(stream=file_bytes, filetype="pdf")
+      text = ""
+      for page in doc:
+        text += page.get_text()
+      doc.close()
+      return clean_extracted_text(text)
+    except Exception as e:
+      print(f"PDF extraction failed: {e}")
+      return ""
+  else:
+    try:
+      return file_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+      return file_bytes.decode('latin-1', errors='replace')
+
+
+def generate_final_response(all_relevant_articles, query, attachment_text=None):
   """
   Generate the final response to the user question based on the strongest level of evidence in the provided article summaries.
 
   Parameters:
   - all_relevant_articles (list): List of all relevant article summaries.
   - query (str): User question.
+  - attachment_text (str, optional): Text extracted from a user-uploaded file providing personal context.
 
   Returns:
   - final_output (str): Final response to the user question.
@@ -1581,10 +1604,14 @@ def generate_final_response(all_relevant_articles, query):
       AI: {example_2_response}
       """
 
-  # Define the human prompt
+  personal_context_section = (
+    f"\n      User's Personal Context (uploaded document):\n      {attachment_text}\n"
+    if attachment_text else ""
+  )
+
   human_prompt_response = f"""
       Evidence and Claims: {all_relevant_articles}
-      User Question: {query}
+      User Question: {query}{personal_context_section}
   """
 
   output_response = client.chat.completions.create(
@@ -1605,6 +1632,41 @@ def generate_final_response(all_relevant_articles, query):
 
   output = output_response.choices[0].message.content
   final_output = output + "\n" + disclaimer
+  return final_output
+
+def generate_attachment_response(document_text, history, query):
+  """
+  Answer the user's question using only the content of their uploaded document
+  and the prior conversation about that document.
+
+  Parameters:
+  - document_text (str): Text extracted from the user-uploaded document.
+  - history (list): Prior turns, each a dict with "question" and "answer" keys.
+  - query (str): User question.
+
+  Returns:
+  - final_output (str): Answer to the user question based on the document.
+  """
+  system_prompt = f"""
+      You are a helpful assistant answering a user's questions based only on the document they uploaded. Use only the information in the provided document, plus the prior conversation below, to answer. If the document does not contain enough information to answer the question, say so clearly instead of guessing.
+
+      Document: {document_text}
+      """
+
+  messages = [{"role": "system", "content": system_prompt}]
+  for turn in history:
+      messages.append({"role": "user", "content": turn["question"]})
+      messages.append({"role": "assistant", "content": turn["answer"]})
+  messages.append({"role": "user", "content": query})
+
+  output_response = client.chat.completions.create(
+    model="gpt-4-turbo",
+    messages=messages,
+    temperature=0.5,
+    top_p=1
+  )
+
+  final_output = output_response.choices[0].message.content
   return final_output
 
 """### Write Final Output to Database"""
@@ -1791,13 +1853,28 @@ def write_output_to_db(user_query, final_output, all_relevant_articles, total_ru
   upload_to_final(env_file, user_query, return_obj)
 
 
+STANDALONE_QUESTION_HISTORY = 7
+
 def generate_standalone_question(raw_question: str, session_memory: list) -> str:
   if not session_memory:
     return raw_question
 
-  history_text = "\n".join(
-    [f"Q: {m['raw_question']}\nA: {m['answer']}" for m in session_memory]
-  )
+  previous_questions = [
+    q for q in (
+      (m.get("standalone_question") or m.get("raw_question", ""))
+      for m in session_memory[-STANDALONE_QUESTION_HISTORY:]
+    ) if q
+  ]
+  if not previous_questions:
+    return raw_question
+
+  questions_text = "\n".join(f"{i}. {q}" for i, q in enumerate(previous_questions, 1))
+
+  previous_answer = (session_memory[-1].get("answer") or "").strip()
+
+  context_text = f"Previous questions (oldest to newest):\n{questions_text}"
+  if previous_answer:
+    context_text += f"\n\nAnswer to the most recent question:\n{previous_answer}"
 
   response = client.chat.completions.create(
     model="gpt-4-turbo",
@@ -1805,20 +1882,22 @@ def generate_standalone_question(raw_question: str, session_memory: list) -> str
       {
         "role": "system",
         "content": (
-          "Given the conversation history and a follow-up question, rephrase the follow-up "
-          "into a fully self-contained standalone question that can be understood without the history. "
+          "You are given the previous questions in a conversation (listed oldest to newest), the answer to the "
+          "most recent question (when available), and a follow-up question. Rephrase the follow-up into a fully "
+          "self-contained standalone question that can be understood on its own. Use the previous answer only to "
+          "resolve references in the follow-up, not to add new information. "
           "If the question is already standalone, return it as-is. Return only the question, nothing else."
         )
       },
       {
         "role": "user",
-        "content": f"Conversation history:\n{history_text}\n\nFollow-up question: {raw_question}"
+        "content": f"{context_text}\n\nFollow-up question: {raw_question}"
       }
     ],
     temperature=0
   )
   standalone_q = response.choices[0].message.content.strip()
-  print(f"[STANDALONE QUESTION] raw='{raw_question}' | standalone='{standalone_q}'")
+  print(f"[STANDALONE QUESTION] previous={previous_questions} | has_previous_answer={bool(previous_answer)} | raw='{raw_question}' | standalone='{standalone_q}'")
   return standalone_q
 
 

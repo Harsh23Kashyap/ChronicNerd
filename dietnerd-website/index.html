@@ -28,6 +28,12 @@
             <input type="text" id="question" placeholder="Enter your question here...">
             <button id="submit">Submit</button>
         </div>
+        <div class="attachment-row">
+            <input type="file" id="attachment-file" accept=".pdf,.txt,.csv,.json" class="visually-hidden">
+            <button type="button" id="attach-button" onclick="document.getElementById('attachment-file').click()">&#128206; Attach file</button>
+            <span id="attachment-label">No file attached</span>
+        </div>
+        <div id="existing-attachments" class="existing-attachments"></div>
         <div class id="example-questions">
             <h3>Example Questions:</h3>
             <div class="example-question">What diet is recommended for PCOS?</div>
