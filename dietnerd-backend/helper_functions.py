@@ -1901,6 +1901,81 @@ def generate_standalone_question(raw_question: str, session_memory: list) -> str
   return standalone_q
 
 
+CONVERSATION_SUMMARY_TEMPLATE = """<summary>
+{summary}
+</summary>
+
+<latest_question>
+{latest_question}
+</latest_question>
+
+<latest_answer>
+{latest_answer}
+</latest_answer>"""
+
+
+def update_conversation_summary(previous_summary: str, latest_question: str, latest_answer: str) -> str:
+  """
+  Rebuild the rolling conversation summary after a turn.
+
+  Only the <summary> section is model-generated: it folds the previous conversation
+  state (which still holds the prior turn's question and answer verbatim) into a
+  single running summary. The <latest_question> and <latest_answer> sections are
+  filled verbatim, so the newest turn stays uncompressed until the turn after it.
+
+  The reference list and disclaimer are stripped first: they carry no conversational
+  context and would otherwise dominate the token cost of every turn.
+
+  Parameters:
+  - previous_summary (str): The conversation_summary from the previous turn, or "" on the first turn.
+  - latest_question (str): The standalone question for this turn.
+  - latest_answer (str): The final answer generated for this turn.
+
+  Returns:
+  - conversation_summary (str): The updated summary in the <summary>/<latest_question>/<latest_answer> format.
+  """
+  answer_body, _ = split_end_output(latest_answer)
+  # split_end_output only trims the disclaimer when a References section was matched.
+  answer_body = answer_body.replace(disclaimer.strip(), "").strip()
+
+  response = client.chat.completions.create(
+    model="gpt-4-turbo",
+    messages=[
+      {
+        "role": "system",
+        "content": (
+          "You maintain a running summary of an ongoing nutrition Q&A conversation. You are given the "
+          "previous conversation state and the newest question-and-answer exchange. Write an updated "
+          "summary that folds the newest exchange into everything that came before it, so the summary "
+          "alone is enough to follow the conversation. Keep the topics discussed, the user's stated "
+          "context or constraints, and the key conclusions reached, including any risks or caveats. "
+          "Do not invent information that is not present. Do not include reference lists or citations. "
+          "Return only the summary prose, with no tags, headings, or preamble."
+        )
+      },
+      {
+        "role": "user",
+        "content": (
+          f"Previous conversation state:\n{previous_summary or '(none — this is the first turn)'}\n\n"
+          f"Latest question:\n{latest_question}\n\n"
+          f"Latest answer:\n{answer_body}"
+        )
+      }
+    ],
+    temperature=0
+  )
+  summary = response.choices[0].message.content.strip()
+
+  conversation_summary = CONVERSATION_SUMMARY_TEMPLATE.format(
+    summary=summary,
+    latest_question=latest_question,
+    latest_answer=answer_body
+  )
+  print(f"[CONVERSATION SUMMARY] had_previous={bool(previous_summary)} | summary_length={len(summary)} | "
+        f"answer_stripped={len(latest_answer)}->{len(answer_body)}")
+  return conversation_summary
+
+
 def _check_entry_relevance(entry: dict, standalone_question: str) -> tuple:
   response = client.chat.completions.create(
     model="gpt-3.5-turbo-0125",

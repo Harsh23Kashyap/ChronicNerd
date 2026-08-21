@@ -115,15 +115,38 @@ async def check_valid(question:str):
 MEMORY_FILE = "dietnerd_memory.json"
 _memory_lock = threading.Lock()
 
+def _default_memory():
+    return {"entries": [], "conversation_summary": "", "retrieved_information": ""}
+
 def _load_memory():
+    # A missing, empty, or corrupt file means there is no conversation yet — start fresh.
     try:
         with open(MEMORY_FILE, "r") as f:
-            return json.load(f)
+            memory = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        memory = {}
+    if not isinstance(memory, dict):
+        memory = {}
+    # Backfill keys added after an existing memory file was first written.
+    for key, default in _default_memory().items():
+        memory.setdefault(key, default)
+    if not isinstance(memory["entries"], list):
+        memory["entries"] = []
+    return memory
 
 def get_session_memory():
     return _load_memory().get("entries", [])
+
+def get_conversation_summary():
+    return _load_memory().get("conversation_summary", "")
+
+def set_conversation_summary(summary):
+    with _memory_lock:
+        memory = _load_memory()
+        memory["conversation_summary"] = summary
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(memory, f, indent=2)
+    logging.info(f"[SESSION MEMORY] Conversation summary updated | length={len(summary)}")
 
 def append_session_memory(entry):
     with _memory_lock:
@@ -138,13 +161,19 @@ def append_session_memory(entry):
 def clear_session_memory():
     with _memory_lock:
         with open(MEMORY_FILE, "w") as f:
-            json.dump({"entries": []}, f, indent=2)
+            json.dump(_default_memory(), f, indent=2)
     logging.info(f"[SESSION MEMORY] Cleared {MEMORY_FILE}")
 
 @app.get("/session_memory")
 async def read_session_memory():
-    entries = get_session_memory()
-    return JSONResponse({"entries": entries, "count": len(entries)})
+    memory = _load_memory()
+    entries = memory["entries"]
+    return JSONResponse({
+        "entries": entries,
+        "count": len(entries),
+        "conversation_summary": memory["conversation_summary"],
+        "retrieved_information": memory["retrieved_information"],
+    })
 
 @app.delete("/session_memory")
 async def reset_session_memory():
@@ -366,6 +395,11 @@ def process_user_query(user_query, session_id):
     append_session_memory(session_memory_entry)
     return_obj["session_memory_entry"] = session_memory_entry
     logging.info(f"[SESSION MEMORY] Entry created | session_id={session_id}")
+
+    conversation_summary = update_conversation_summary(
+        get_conversation_summary(), user_query, final_output
+    )
+    set_conversation_summary(conversation_summary)
 
     loop.run_until_complete(send_update(session_id, return_obj))
 

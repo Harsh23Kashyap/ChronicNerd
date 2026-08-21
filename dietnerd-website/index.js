@@ -67,9 +67,12 @@ const getAnswer = async (question) => {
         citations = JSON.stringify(citations.citations)
         console.log(citations_obj)
         // Assuming the result has the reference information you need
-        localStorage.setItem('referenceObject', JSON.stringify(citations_obj));
-        localStorage.setItem('citations', citations);
-        localStorage.setItem('allArticles', JSON.stringify(allArticles));
+        // TEMPORARILY DISABLED — citations in localStorage are only written on this
+        // cache-hit path, never by runGeneration, so a fresh profile leaves them null
+        // and formatReferences throws. Re-enable together with the block in formatReferences.
+        // localStorage.setItem('referenceObject', JSON.stringify(citations_obj));
+        // localStorage.setItem('citations', citations);
+        // localStorage.setItem('allArticles', JSON.stringify(allArticles));
 
 
         return output;
@@ -156,8 +159,13 @@ function parseCitation(citation) {
  * @return {string} The formatted references as a string.
  */
 const formatReferences = (output) => {
-    const citations = JSON.parse(localStorage.getItem('citations'));
-    const citationObj = JSON.parse(localStorage.getItem('referenceObject'));
+    // TEMPORARILY DISABLED — see the matching block in getAnswer. These keys are null
+    // on the fresh-generation path, so findCitation(ref, null) throws and takes the
+    // whole answer render down with it. Bail out until citations are stored on both paths.
+    return 'No references available.';
+
+    // const citations = JSON.parse(localStorage.getItem('citations'));
+    // const citationObj = JSON.parse(localStorage.getItem('referenceObject'));
     const references = extractReferences(output);
 
     console.log("REFERENCES", references);
@@ -415,7 +423,9 @@ const generatePDF = () => {
         doc.text("Citation Summaries", 15, y);
         y += 20;
 
-        Object.entries(citationObj).forEach(([citation, data], index) => {
+        // `|| {}` guards the disabled localStorage block above — referenceObject is
+        // null while citations are turned off, and Object.entries(null) throws.
+        Object.entries(citationObj || {}).forEach(([citation, data], index) => {
             if (index > 0) {  
                 doc.addPage();
                 y = 20;
