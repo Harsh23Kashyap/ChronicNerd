@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dietnerd-backend",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd '/Users/sanghitachakraborty/Desktop/Projects/Dennis Shasha/diet-nerd/DietNerd/dietnerd-backend' && exec '/Users/sanghitachakraborty/Desktop/Projects/Dennis Shasha/diet-nerd/DietNerd/venv/bin/python' -m uvicorn main:app --host 127.0.0.1 --port 8000"],
+      "port": 8000
+    },
+    {
+      "name": "dietnerd-website",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "exec '/Users/sanghitachakraborty/Desktop/Projects/Dennis Shasha/diet-nerd/DietNerd/venv/bin/python' -m http.server 5500 --directory '/Users/sanghitachakraborty/Desktop/Projects/Dennis Shasha/diet-nerd/DietNerd/dietnerd-website'"],
+      "port": 5500
+    }
+  ]
+}

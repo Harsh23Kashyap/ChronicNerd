@@ -282,17 +282,66 @@ def process_user_query(user_query, session_id):
     session_memory = get_session_memory()
     raw_question = user_query
 
-    attachment_exist = check_attachment_exists()
-    if attachment_exist:
-        return process_attachment_query(user_query, session_id)
-
     if session_memory:
         user_query = generate_standalone_question(user_query, session_memory)
         logging.info(f"[SESSION MEMORY] Standalone question generated: '{user_query}'")
 
+    user_attachment_context = None
+    attachment_exist = False
+    attachment_based_answer = False
+
+    if check_attachment_exists():
+        attachment_exist = True
+        try:
+            with open("user_documents.json", "r") as f:
+                user_documents = json.load(f)
+            documents = user_documents.get("documents", {})
+            if documents:
+                user_attachment_context = "\n\n".join(
+                    f"Document: {name}\n{content}" for name, content in documents.items()
+                )
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    attachment_partial_answer = None
+    partial_question = None
+    if attachment_exist and user_attachment_context:
+        can_answer, attachment_answer, question_not_answered = try_answer_from_attachment(user_query, user_attachment_context)
+        if can_answer and attachment_answer:
+            attachment_based_answer = True
+            logging.info("[ATTACHMENT] Fully answered from attachment — skipping PubMed pipeline")
+            return_obj = {
+                "end_output": attachment_answer,
+                "relevant_articles": [],
+                "citations_obj": [],
+                "citations": [],
+                "session_memory_entry": {
+                    "session_id": session_id,
+                    "raw_question": raw_question,
+                    "standalone_question": user_query,
+                    "answer": attachment_answer
+                }
+            }
+            append_session_memory(return_obj["session_memory_entry"])
+            conversation_summary = update_conversation_summary(
+                get_conversation_summary(), user_query, attachment_answer
+            )
+            set_conversation_summary(conversation_summary)
+            loop.run_until_complete(send_update(session_id, return_obj))
+            return return_obj
+        else:
+            logging.info("[ATTACHMENT] Attachment insufficient — falling through to PubMed pipeline")
+            if attachment_answer:
+                attachment_partial_answer = attachment_answer
+            if question_not_answered:
+                partial_question = question_not_answered
+                logging.info(f"[ATTACHMENT] Sending unanswered portion to PubMed: '{partial_question}'")
+
+    pipeline_query = partial_question if attachment_partial_answer and partial_question else user_query
+
     # Query Generation
     start_poc = time.time()
-    general_query, query_contention, query_list = query_generation(user_query)
+    general_query, query_contention, query_list = query_generation(pipeline_query)
     end_poc = time.time()
 
     print("Generated PubMed queries")
@@ -307,7 +356,7 @@ def process_user_query(user_query, session_id):
     loop.run_until_complete(send_update(session_id, f"Retrieved {len(deduplicated_articles_collected)} Articles..."))
     # Relevance Classifier
     start_relevant = time.time()
-    relevant_articles, irrelevant_articles = concurrent_relevance_classification(deduplicated_articles_collected, user_query)
+    relevant_articles, irrelevant_articles = concurrent_relevance_classification(deduplicated_articles_collected, pipeline_query)
     end_relevant = time.time()
 
     print("relevant articles")
@@ -336,7 +385,9 @@ def process_user_query(user_query, session_id):
 
     # Final Output
     start_output = time.time()
-    final_output = generate_final_response(all_relevant_articles, user_query, None)
+    final_output = generate_final_response(all_relevant_articles, pipeline_query, None)
+    if attachment_partial_answer:
+        final_output = attachment_partial_answer + "\n\n" + final_output
     end_output = time.time()
 
     poc_duration = end_poc - start_poc
