@@ -2077,3 +2077,36 @@ def extract_topics(question: str, answer: str) -> list:
     return json.loads(raw)
   except Exception:
     return []
+
+
+def try_answer_from_attachment(question, document_text):
+  system_prompt = f"""You are a helpful assistant. The user has uploaded a document. Determine whether the document contains enough information to fully answer the user's question.
+
+If the document contains all the information needed to completely answer the question, respond with exactly this JSON format:
+{{"can_answer": true, "answer": "<your complete answer based on the document>", "question_not_answered": null}}
+
+If the document contains enough information to partially answer the question but not fully, respond with exactly this JSON format:
+{{"can_answer": false, "answer": "<your partial answer based on what the document covers>", "question_not_answered": "<the specific part of the question the document does not address>"}}
+
+If the document contains no relevant information at all, respond with exactly this JSON format:
+{{"can_answer": false, "answer": null, "question_not_answered": "<the full question>"}}
+
+Document:
+{document_text}"""
+
+  output_response = client.chat.completions.create(
+    model="gpt-4-turbo",
+    messages=[
+      {"role": "system", "content": system_prompt},
+      {"role": "user", "content": question}
+    ],
+    temperature=0,
+    top_p=1
+  )
+
+  raw = output_response.choices[0].message.content
+  try:
+    result = json.loads(raw)
+    return result.get("can_answer", False), result.get("answer"), result.get("question_not_answered")
+  except json.JSONDecodeError:
+    return False, None, question
