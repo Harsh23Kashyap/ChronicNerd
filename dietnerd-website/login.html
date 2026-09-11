@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DietNerd - Login</title>
+    <link rel="stylesheet" type="text/css" href="login.css">
+    <link href='https://fonts.googleapis.com/css?family=Open Sans' rel="stylesheet">
+</head>
+<body>
+    <div class="login-container">
+        <a href="login.html"><img src="assets/dietnerd_logo.png" alt="DietNerd Logo" class="logo"></a>
+
+        <!-- Login Form -->
+        <div id="login-form">
+            <h2>Sign in to continue</h2>
+            <div class="form-group">
+                <label for="login-email">Email</label>
+                <input type="email" id="login-email" placeholder="you@example.com">
+            </div>
+            <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" placeholder="Enter your password">
+            </div>
+            <button class="auth-button" id="login-button">Sign In</button>
+            <div id="login-error" class="error-message"></div>
+            <p class="toggle-text">Don't have an account? <a id="show-register">Register</a></p>
+        </div>
+
+        <!-- Register Form -->
+        <div id="register-form" style="display:none;">
+            <h2>Create your account</h2>
+            <div class="form-group">
+                <label for="register-email">Email</label>
+                <input type="email" id="register-email" placeholder="you@example.com">
+            </div>
+            <div class="form-group">
+                <label for="register-password">Password</label>
+                <input type="password" id="register-password" placeholder="Choose a password">
+            </div>
+            <button class="auth-button" id="register-button">Register</button>
+            <div id="register-error" class="error-message"></div>
+            <div id="register-success" class="success-message"></div>
+            <p class="toggle-text">Already have an account? <a id="show-login">Sign In</a></p>
+        </div>
+    </div>
+
+    <script src="env.js"></script>
+    <script>
+        const API_URL = window.env.API_URL;
+
+        // Toggle between forms
+        document.getElementById('show-register').addEventListener('click', function() {
+            document.getElementById('login-form').style.display = 'none';
+            document.getElementById('register-form').style.display = 'block';
+            document.getElementById('register-error').textContent = '';
+            document.getElementById('register-success').textContent = '';
+        });
+
+        document.getElementById('show-login').addEventListener('click', function() {
+            document.getElementById('register-form').style.display = 'none';
+            document.getElementById('login-form').style.display = 'block';
+            document.getElementById('login-error').textContent = '';
+        });
+
+        // Register
+        document.getElementById('register-button').addEventListener('click', async function() {
+            const email = document.getElementById('register-email').value.trim();
+            const password = document.getElementById('register-password').value;
+            const errorEl = document.getElementById('register-error');
+            const successEl = document.getElementById('register-success');
+            errorEl.textContent = '';
+            successEl.textContent = '';
+
+            if (!email || !password) {
+                errorEl.textContent = 'Please fill in both fields.';
+                return;
+            }
+
+            try {
+                const res = await fetch(API_URL + '/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email, password})
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errorEl.textContent = data.detail || 'Registration failed.';
+                    return;
+                }
+                successEl.textContent = 'Account created! You can now sign in.';
+                document.getElementById('register-email').value = '';
+                document.getElementById('register-password').value = '';
+            } catch (e) {
+                errorEl.textContent = 'Could not reach the server.';
+            }
+        });
+
+        // Login
+        document.getElementById('login-button').addEventListener('click', async function() {
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+            const errorEl = document.getElementById('login-error');
+            errorEl.textContent = '';
+
+            if (!email || !password) {
+                errorEl.textContent = 'Please fill in both fields.';
+                return;
+            }
+
+            try {
+                const res = await fetch(API_URL + '/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email, password})
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errorEl.textContent = data.detail || 'Login failed.';
+                    return;
+                }
+                sessionStorage.setItem('dietnerd_user', data.email);
+                window.location.href = 'index.html';
+            } catch (e) {
+                errorEl.textContent = 'Could not reach the server.';
+            }
+        });
+
+        // Allow Enter key to submit
+        document.getElementById('login-password').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('login-button').click();
+        });
+        document.getElementById('register-password').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('register-button').click();
+        });
+
+        // If already logged in, go straight to the app
+        if (sessionStorage.getItem('dietnerd_user')) {
+            window.location.href = 'index.html';
+        }
+    </script>
+</body>
+</html>

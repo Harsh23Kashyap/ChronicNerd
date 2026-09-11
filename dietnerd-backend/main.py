@@ -20,6 +20,9 @@ from typing import List, Dict, Any, Optional
 from helper_functions import * 
 
 import heapq
+import hashlib
+import os
+import mysql.connector
 
 import logging
 
@@ -48,6 +51,59 @@ app.add_middleware(
 class QueryModel(BaseModel):
     user_query: str
     session_memory: List[dict] = []
+
+class AuthModel(BaseModel):
+    email: str
+    password: str
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def _get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv('host'),
+        port=os.getenv('port'),
+        user=os.getenv('user'),
+        password=os.getenv('password'),
+        database=os.getenv('database')
+    )
+
+@app.post("/register")
+async def register(auth: AuthModel):
+    email = auth.email.strip().lower()
+    password = auth.password
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT email FROM users WHERE email = %s", (email,))
+        if cursor.fetchone():
+            raise HTTPException(status_code=409, detail="User already exists.")
+        cursor.execute("INSERT INTO users (email, password) VALUES (%s, %s)", (email, _hash_password(password)))
+        connection.commit()
+    finally:
+        connection.close()
+    logging.info(f"[AUTH] Registered new user: {email}")
+    return {"message": "Registration successful."}
+
+@app.post("/login")
+async def login(auth: AuthModel):
+    email = auth.email.strip().lower()
+    password = auth.password
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT password FROM users WHERE email = %s", (email,))
+        row = cursor.fetchone()
+    finally:
+        connection.close()
+    if not row:
+        raise HTTPException(status_code=401, detail="User not found.")
+    if row[0] != _hash_password(password):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    logging.info(f"[AUTH] Login successful: {email}")
+    return {"message": "Login successful.", "email": email}
 
 disclaimer = """
 DietNerd is an exploratory tool designed to enrich your conversations with a registered dietitian or registered dietitian nutritionist, who can then review your profile before providing recommendations.
