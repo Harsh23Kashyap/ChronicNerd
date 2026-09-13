@@ -1,17 +1,10 @@
 
 const baseURL = window.env.API_URL;  // Adjust the base URL as needed
 
-function getSessionMemory() {
-    const raw = sessionStorage.getItem('session_memory');
-    return raw ? JSON.parse(raw) : [];
+function getUserEmail() {
+    return sessionStorage.getItem('dietnerd_user') || '';
 }
 
-function appendToSessionMemory(entry) {
-    const memory = getSessionMemory();
-    memory.push(entry);
-    sessionStorage.setItem('session_memory', JSON.stringify(memory));
-    console.log('[SESSION MEMORY] Appended entry. Total entries:', memory.length, entry);
-}
 const disclaimer = `
 DietNerd is an exploratory tool designed to enrich your conversations with a registered dietitian or registered dietitian nutritionist, who can then review your profile before providing recommendations.
 Please be aware that the insights provided by DietNerd may not fully take into consideration all potential medication interactions or pre-existing conditions.
@@ -460,7 +453,7 @@ async function refreshExistingAttachments() {
     const existingAttachmentsElement = document.getElementById('existing-attachments');
     const label = document.getElementById('attachment-label');
     try {
-        const response = await fetch(`${baseURL}/list_attachments`);
+        const response = await fetch(`${baseURL}/list_attachments?email=${encodeURIComponent(getUserEmail())}`);
         const data = await response.json();
         const documentNames = data.documents || [];
         attachmentExists = documentNames.length > 0;
@@ -487,6 +480,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const file = fileInput.files[0];
             const formData = new FormData();
             formData.append('attachment', file);
+            formData.append('email', getUserEmail());
             try {
                 await fetch(`${baseURL}/upload_attachment`, {
                     method: 'POST',
@@ -504,7 +498,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!event.target.matches('.existing-attachment-remove')) return;
         const filename = event.target.dataset.filename;
         try {
-            await fetch(`${baseURL}/remove_attachment?filename=${encodeURIComponent(filename)}`, {
+            await fetch(`${baseURL}/remove_attachment?filename=${encodeURIComponent(filename)}&email=${encodeURIComponent(getUserEmail())}`, {
                 method: 'DELETE',
             });
             await refreshExistingAttachments();
@@ -560,7 +554,7 @@ async function runGeneration(userQuery) {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ user_query: userQuery, session_memory: getSessionMemory() }),
+                body: JSON.stringify({ user_query: userQuery, email: getUserEmail(), session_memory: [] }),
             });
             const data = await response.json();
             const sessionId = data.session_id;
@@ -580,9 +574,6 @@ async function runGeneration(userQuery) {
                     // Check if this is the final update
                     if (data.update.end_output) {
                         console.log("Received final update. Closing EventSource.");
-                        if (data.update.session_memory_entry) {
-                            appendToSessionMemory(data.update.session_memory_entry);
-                        }
                         eventSource.close();
                         resolve(data.update); // Resolve with the full update object
                     } else {
@@ -638,15 +629,12 @@ document.getElementById('submit').addEventListener('click', async (event) => {
             return;
         }
 
-        // Check session memory only if there's history
-        if (getSessionMemory().length === 0) {
-            console.log('[SESSION MEMORY] No history — skipping session memory check');
-        }
-        if (getSessionMemory().length > 0) try {
+        // Always check session memory via the backend (memory is stored in the DB per user)
+        try {
                 const sessionRes = await fetch(`${baseURL}/check_session_memory`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_query: question, session_memory: getSessionMemory() })
+                    body: JSON.stringify({ user_query: question, email: getUserEmail(), session_memory: [] })
                 });
                 const sessionData = await sessionRes.json();
                 console.log('[SESSION MEMORY] check result:', sessionData);
@@ -659,12 +647,6 @@ document.getElementById('submit').addEventListener('click', async (event) => {
                     generatePdfButton.classList.remove("hidden");
                     exampleQuestions.classList.add('hidden');
                     localStorage.setItem('rawOutput', sessionData.answer);
-                    appendToSessionMemory({
-                        raw_question: question,
-                        standalone_question: sessionData.standalone_question,
-                        answer: sessionData.answer,
-                        "Topic of discussion": []
-                    });
                     return;
                 }
         } catch (err) {
@@ -684,12 +666,6 @@ document.getElementById('submit').addEventListener('click', async (event) => {
             hintElement.textContent = '';
             generatePdfButton.classList.remove("hidden");
             exampleQuestions.classList.add('hidden');
-            appendToSessionMemory({
-                raw_question: question,
-                standalone_question: question,
-                answer: answer,
-                "Topic of discussion": []
-            });
         } catch (error) {
             console.log(error)
             console.log('Not in database, retrieving similiar queries...');

@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import uuid
 import json
-import threading
 from urllib.parse import unquote
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,8 +47,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def create_tables():
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_session_memory (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                session_id VARCHAR(255),
+                raw_question TEXT,
+                standalone_question TEXT,
+                answer LONGTEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_email (email),
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_conversation_summary (
+                email VARCHAR(255) PRIMARY KEY,
+                summary LONGTEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_documents (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                filename VARCHAR(500) NOT NULL,
+                content LONGTEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_email_filename (email, filename),
+                INDEX idx_email (email),
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+            )
+        """)
+        connection.commit()
+        logging.info("[STARTUP] Database tables verified/created")
+    finally:
+        connection.close()
+
 class QueryModel(BaseModel):
     user_query: str
+    email: str
     session_memory: List[dict] = []
 
 class AuthModel(BaseModel):
@@ -168,143 +211,143 @@ async def check_valid(question:str):
     final_output = "good"
    return {"response" : final_output}
 
-MEMORY_FILE = "dietnerd_memory.json"
-_memory_lock = threading.Lock()
-
-def _default_memory():
-    return {"entries": [], "conversation_summary": "", "retrieved_information": ""}
-
-def _load_memory():
-    # A missing, empty, or corrupt file means there is no conversation yet — start fresh.
+def get_session_memory(email: str):
+    connection = _get_db_connection()
     try:
-        with open(MEMORY_FILE, "r") as f:
-            memory = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        memory = {}
-    if not isinstance(memory, dict):
-        memory = {}
-    # Backfill keys added after an existing memory file was first written.
-    for key, default in _default_memory().items():
-        memory.setdefault(key, default)
-    if not isinstance(memory["entries"], list):
-        memory["entries"] = []
-    return memory
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT session_id, raw_question, standalone_question, answer FROM user_session_memory WHERE email = %s ORDER BY id",
+            (email,)
+        )
+        return cursor.fetchall()
+    finally:
+        connection.close()
 
-def get_session_memory():
-    return _load_memory().get("entries", [])
+def get_conversation_summary(email: str):
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT summary FROM user_conversation_summary WHERE email = %s", (email,))
+        row = cursor.fetchone()
+        return row[0] if row else ""
+    finally:
+        connection.close()
 
-def get_conversation_summary():
-    return _load_memory().get("conversation_summary", "")
+def set_conversation_summary(email: str, summary: str):
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO user_conversation_summary (email, summary) VALUES (%s, %s) ON DUPLICATE KEY UPDATE summary = %s",
+            (email, summary, summary)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    logging.info(f"[SESSION MEMORY] Conversation summary updated for {email} | length={len(summary)}")
 
-def set_conversation_summary(summary):
-    with _memory_lock:
-        memory = _load_memory()
-        memory["conversation_summary"] = summary
-        with open(MEMORY_FILE, "w") as f:
-            json.dump(memory, f, indent=2)
-    logging.info(f"[SESSION MEMORY] Conversation summary updated | length={len(summary)}")
+def append_session_memory(email: str, entry: dict):
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO user_session_memory (email, session_id, raw_question, standalone_question, answer) VALUES (%s, %s, %s, %s, %s)",
+            (email, entry.get("session_id"), entry.get("raw_question"), entry.get("standalone_question"), entry.get("answer"))
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    logging.info(f"[SESSION MEMORY] Appended entry for {email}")
 
-def append_session_memory(entry):
-    with _memory_lock:
-        memory = _load_memory()
-        entries = memory.get("entries", [])
-        entries.append(entry)
-        memory["entries"] = entries
-        with open(MEMORY_FILE, "w") as f:
-            json.dump(memory, f, indent=2)
-    logging.info(f"[SESSION MEMORY] Appended entry to {MEMORY_FILE} | total_entries={len(entries)}")
-
-def clear_session_memory():
-    with _memory_lock:
-        with open(MEMORY_FILE, "w") as f:
-            json.dump(_default_memory(), f, indent=2)
-    logging.info(f"[SESSION MEMORY] Cleared {MEMORY_FILE}")
+def clear_session_memory(email: str):
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM user_session_memory WHERE email = %s", (email,))
+        cursor.execute("DELETE FROM user_conversation_summary WHERE email = %s", (email,))
+        connection.commit()
+    finally:
+        connection.close()
+    logging.info(f"[SESSION MEMORY] Cleared memory for {email}")
 
 @app.get("/session_memory")
-async def read_session_memory():
-    memory = _load_memory()
-    entries = memory["entries"]
+async def read_session_memory(email: str = Query(...)):
+    entries = get_session_memory(email)
+    summary = get_conversation_summary(email)
     return JSONResponse({
         "entries": entries,
         "count": len(entries),
-        "conversation_summary": memory["conversation_summary"],
-        "retrieved_information": memory["retrieved_information"],
+        "conversation_summary": summary,
     })
 
 @app.delete("/session_memory")
-async def reset_session_memory():
-    clear_session_memory()
+async def reset_session_memory(email: str = Query(...)):
+    clear_session_memory(email)
     return JSONResponse({"status": "ok"})
 
 class SessionMemoryCheckModel(BaseModel):
     user_query: str
+    email: str
     session_memory: List[dict] = []
 
 @app.post("/check_session_memory")
 async def check_session_memory(body: SessionMemoryCheckModel):
-    history = get_session_memory()
-    logging.info(f"[SESSION MEMORY] /check_session_memory called | session_memory_empty={len(history) == 0} | history_length={len(history)}")
+    history = get_session_memory(body.email)
+    logging.info(f"[SESSION MEMORY] /check_session_memory called | email={body.email} | session_memory_empty={len(history) == 0} | history_length={len(history)}")
     if not history:
         logging.info("[SESSION MEMORY] Session memory is EMPTY — skipping check, going to normal flow")
         return JSONResponse({"answered": False, "answer": None})
     standalone_q = generate_standalone_question(body.user_query, history)
 
-    # Answering from session memory is disabled — we only rewrite the question and
-    # always fall through to the full pipeline.
-    # relevant_context = get_relevant_session_context(standalone_q, history)
-    # can_answer, answer = try_answer_from_context(standalone_q, relevant_context)
     can_answer, answer = False, None
 
     logging.info(f"[SESSION MEMORY] can_answer={can_answer} | standalone_q='{standalone_q}'")
     return JSONResponse({"answered": can_answer, "answer": answer, "standalone_question": standalone_q})
 
 @app.post("/upload_attachment")
-async def upload_attachment(attachment: UploadFile = File(...)):
+async def upload_attachment(attachment: UploadFile = File(...), email: str = Form(...)):
     file_bytes = await attachment.read()
     attachment_text = extract_text_from_upload(file_bytes, attachment.filename)
 
+    connection = _get_db_connection()
     try:
-        with open("user_documents.json", "r") as f:
-            user_documents = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        user_documents = {}
-
-    documents = user_documents.get("documents", {})
-    documents[attachment.filename] = attachment_text
-    user_documents["documents"] = documents
-
-    with open("user_documents.json", "w") as f:
-        json.dump(user_documents, f)
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO user_documents (email, filename, content) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE content = %s",
+            (email, attachment.filename, attachment_text, attachment_text)
+        )
+        connection.commit()
+    finally:
+        connection.close()
     return JSONResponse({"status": "ok"})
 
 @app.get("/list_attachments")
-async def list_attachments():
+async def list_attachments(email: str = Query(...)):
+    connection = _get_db_connection()
     try:
-        with open("user_documents.json", "r") as f:
-            user_documents = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        user_documents = {}
-    return JSONResponse({"documents": list(user_documents.get("documents", {}).keys())})
+        cursor = connection.cursor()
+        cursor.execute("SELECT filename FROM user_documents WHERE email = %s", (email,))
+        rows = cursor.fetchall()
+    finally:
+        connection.close()
+    return JSONResponse({"documents": [row[0] for row in rows]})
 
 @app.delete("/remove_attachment")
-async def remove_attachment(filename: str = Query(...)):
+async def remove_attachment(filename: str = Query(...), email: str = Query(...)):
+    connection = _get_db_connection()
     try:
-        with open("user_documents.json", "r") as f:
-            user_documents = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        user_documents = {}
-    documents = user_documents.get("documents", {})
-    documents.pop(filename, None)
-    user_documents["documents"] = documents
-    with open("user_documents.json", "w") as f:
-        json.dump(user_documents, f)
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM user_documents WHERE email = %s AND filename = %s", (email, filename))
+        connection.commit()
+    finally:
+        connection.close()
     return JSONResponse({"status": "ok"})
 
 @app.post("/process_query")
 async def process_query(background_tasks: BackgroundTasks, query: QueryModel):
     request_id = str(uuid.uuid4())
     update_queues[request_id]  # create the queue before the SSE client connects
-    background_tasks.add_task(process_user_query, query.user_query, request_id)
+    background_tasks.add_task(process_user_query, query.user_query, request_id, query.email)
     return JSONResponse({"session_id": request_id})
 
 @app.get("/sse")
@@ -326,16 +369,27 @@ async def event_generator(session_id: str):
     finally:
         del update_queues[session_id]
 
-def check_attachment_exists():
+def check_attachment_exists(email: str):
+    connection = _get_db_connection()
     try:
-        with open("user_documents.json", "r") as f:
-            user_documents = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return False
-    return bool(user_documents.get("documents"))
+        cursor = connection.cursor()
+        cursor.execute("SELECT COUNT(*) FROM user_documents WHERE email = %s", (email,))
+        count = cursor.fetchone()[0]
+        return count > 0
+    finally:
+        connection.close()
 
-def process_user_query(user_query, session_id):
-    session_memory = get_session_memory()
+def get_user_documents(email: str):
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT filename, content FROM user_documents WHERE email = %s", (email,))
+        return {row[0]: row[1] for row in cursor.fetchall()}
+    finally:
+        connection.close()
+
+def process_user_query(user_query, session_id, email):
+    session_memory = get_session_memory(email)
     raw_question = user_query
 
     if session_memory:
@@ -346,18 +400,13 @@ def process_user_query(user_query, session_id):
     attachment_exist = False
     attachment_based_answer = False
 
-    if check_attachment_exists():
+    if check_attachment_exists(email):
         attachment_exist = True
-        try:
-            with open("user_documents.json", "r") as f:
-                user_documents = json.load(f)
-            documents = user_documents.get("documents", {})
-            if documents:
-                user_attachment_context = "\n\n".join(
-                    f"Document: {name}\n{content}" for name, content in documents.items()
-                )
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+        documents = get_user_documents(email)
+        if documents:
+            user_attachment_context = "\n\n".join(
+                f"Document: {name}\n{content}" for name, content in documents.items()
+            )
 
     attachment_partial_answer = None
     partial_question = None
@@ -378,11 +427,11 @@ def process_user_query(user_query, session_id):
                     "answer": attachment_answer
                 }
             }
-            append_session_memory(return_obj["session_memory_entry"])
+            append_session_memory(email, return_obj["session_memory_entry"])
             conversation_summary = update_conversation_summary(
-                get_conversation_summary(), user_query, attachment_answer
+                get_conversation_summary(email), user_query, attachment_answer
             )
-            set_conversation_summary(conversation_summary)
+            set_conversation_summary(email, conversation_summary)
             loop.run_until_complete(send_update(session_id, return_obj))
             return return_obj
         else:
@@ -499,32 +548,24 @@ def process_user_query(user_query, session_id):
         "standalone_question": user_query,
         "answer": final_output
     }
-    append_session_memory(session_memory_entry)
+    append_session_memory(email, session_memory_entry)
     return_obj["session_memory_entry"] = session_memory_entry
-    logging.info(f"[SESSION MEMORY] Entry created | session_id={session_id}")
+    logging.info(f"[SESSION MEMORY] Entry created | session_id={session_id} | email={email}")
 
     conversation_summary = update_conversation_summary(
-        get_conversation_summary(), user_query, final_output
+        get_conversation_summary(email), user_query, final_output
     )
-    set_conversation_summary(conversation_summary)
+    set_conversation_summary(email, conversation_summary)
 
     loop.run_until_complete(send_update(session_id, return_obj))
 
     return return_obj
 
-def process_attachment_query(user_query, session_id):
-    with open("user_documents.json", "r") as f:
-        user_documents = json.load(f)
-    documents = user_documents.get("documents", {})
+def process_attachment_query(user_query, session_id, email):
+    documents = get_user_documents(email)
     document_text = "\n\n".join(f"Document: {name}\n{content}" for name, content in documents.items())
-    history = user_documents.get("history", [])
 
-    final_output = generate_attachment_response(document_text, history, user_query)
-
-    history.append({"question": user_query, "answer": final_output})
-    user_documents["history"] = history
-    with open("user_documents.json", "w") as f:
-        json.dump(user_documents, f)
+    final_output = generate_attachment_response(document_text, [], user_query)
 
     return_obj = {
         "end_output": final_output,
