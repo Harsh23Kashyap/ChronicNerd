@@ -1,83 +1,86 @@
-# DietNerd Database Schema
+# DietNerd database schema
 
-All tables live in the MySQL database configured via `ATT81274.env` (AWS RDS).
-Tables are auto-created on server startup in `main.py`.
+The backend uses the MySQL database configured by its environment variables.
+Fresh databases are initialized on application startup. Existing deployments must back up the database and apply
+`migrations/001_conversation_lifecycle.sql`. The migration preserves each
+user's old email-scoped history as one "Imported legacy history" conversation
+and retains the old summary table as a backup for verification.
 
-## Tables
+## `users`
 
-### `users`
+| Column | Type | Notes |
+|---|---|---|
+| `email` | VARCHAR(255) | Primary key |
+| `password` | VARCHAR(255) | Legacy SHA-256 hash; P1 will replace this with a salted password hash |
+| `created_at` | TIMESTAMP | Creation time |
 
-Authentication table. Created by the `/register` endpoint.
+`users` is created before every table that references it.
 
-| Column     | Type         | Notes                          |
-|------------|--------------|--------------------------------|
-| `email`    | VARCHAR(255) | **Primary key**                |
-| `password` | VARCHAR(255) | SHA-256 hashed                 |
+## `conversations`
 
-### `user_session_memory`
+| Column | Type | Notes |
+|---|---|---|
+| `conversation_id` | VARCHAR(36) | UUID primary key |
+| `email` | VARCHAR(255) | Owner, FK to `users.email` |
+| `title` | VARCHAR(255) | Initial question, truncated to 120 characters |
+| `next_query_number` | INT | Next turn number, allocated under a row lock |
+| `created_at` | TIMESTAMP | Creation time |
+| `updated_at` | TIMESTAMP | Last turn/update time |
 
-Per-user conversation history. One row per question/answer exchange.
+## `user_session_memory`
 
-| Column                | Type         | Notes                                              |
-|-----------------------|--------------|----------------------------------------------------|
-| `id`                  | INT          | Auto-increment primary key                         |
-| `email`               | VARCHAR(255) | FK → `users.email` (CASCADE delete)                |
-| `session_id`          | VARCHAR(255) | UUID of the processing session                     |
-| `raw_question`        | TEXT         | The question exactly as the user typed it           |
-| `standalone_question` | TEXT         | Rewritten question with conversation context baked in |
-| `answer`              | LONGTEXT     | The generated answer                               |
-| `created_at`          | TIMESTAMP    | Defaults to current time                           |
+One row per question/answer turn.
 
-Used by the backend to:
-- Rewrite vague follow-ups into standalone questions (e.g. "what about zinc?" → "What are the benefits of zinc for sleep?")
-- Provide conversation context across browser sessions (persists in DB, not sessionStorage)
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INT | Auto-increment primary key |
+| `email` | VARCHAR(255) | FK to `users.email` |
+| `conversation_id` | VARCHAR(36) | FK to `conversations.conversation_id` |
+| `query_number` | INT | Monotonic within a conversation |
+| `request_id` | VARCHAR(36) | Ephemeral request/SSE correlation UUID |
+| `raw_question` | TEXT | User input |
+| `standalone_question` | TEXT | Context-rewritten input, generated once |
+| `answer` | LONGTEXT | Generated or cached answer |
+| `created_at` | TIMESTAMP | Turn creation time |
 
-### `user_conversation_summary`
+`(conversation_id, query_number)` is unique. Allocation locks the owning
+conversation row, updates `next_query_number`, and inserts the turn in one
+transaction.
 
-Rolling summary of the user's conversation so far. One row per user, updated after each answer.
+## `user_conversation_summary`
 
-| Column       | Type         | Notes                                      |
-|--------------|--------------|--------------------------------------------|
-| `email`      | VARCHAR(255) | **Primary key**, FK → `users.email` (CASCADE) |
-| `summary`    | LONGTEXT     | GPT-generated summary of all Q&A so far    |
-| `updated_at` | TIMESTAMP    | Auto-updates on every write                |
+| Column | Type | Notes |
+|---|---|---|
+| `email` | VARCHAR(255) | FK to `users.email` |
+| `conversation_id` | VARCHAR(36) | FK to `conversations.conversation_id` |
+| `summary` | LONGTEXT | Rolling summary for this conversation only |
+| `updated_at` | TIMESTAMP | Last update |
 
-### `user_documents`
+The composite primary key is `(email, conversation_id)`.
 
-User-uploaded files (PDF, TXT, CSV, JSON). Stored as extracted text, not raw bytes.
+## `user_documents`
 
-| Column       | Type         | Notes                                              |
-|--------------|--------------|----------------------------------------------------|
-| `id`         | INT          | Auto-increment primary key                         |
-| `email`      | VARCHAR(255) | FK → `users.email` (CASCADE delete)                |
-| `filename`   | VARCHAR(500) | Original filename                                  |
-| `content`    | LONGTEXT     | Extracted text content of the file                  |
-| `created_at` | TIMESTAMP    | Defaults to current time                           |
+Unchanged: extracted attachment text is stored by user and filename. The
+unique key `(email, filename)` makes re-upload replace the prior content.
 
-Unique constraint on `(email, filename)` — re-uploading the same filename replaces the content.
+## Identifier lifecycle
 
-## Relationships
+- `conversation_id` is durable and stored by the browser across turns.
+- `request_id` exists only to correlate one `/process_query` call with `/sse`.
+- `query_number` is durable ordering within one conversation.
 
-```
-users.email ─┬─< user_session_memory.email
-             ├─< user_conversation_summary.email
-             └─< user_documents.email
-```
+## Conversation APIs
 
-All child tables cascade on delete — removing a user wipes their memory, summary, and documents.
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/conversations` | POST | Create a conversation |
+| `/conversations` | GET | List a user's conversations |
+| `/conversations/{conversation_id}` | DELETE | Delete an owned conversation and cascaded turns/summary |
+| `/session_memory` | GET | Read one conversation |
+| `/session_memory` | DELETE | Clear one conversation's turns and summary |
+| `/cached_answer` | POST | Fetch and persist a cache hit in the active conversation |
+| `/process_query` | POST | Start generation and return separate request and conversation IDs |
+| `/sse?request_id=...` | GET | Stream one request's updates |
 
-## API → Table mapping
-
-| Endpoint                  | Method | Table(s) touched                                     |
-|---------------------------|--------|------------------------------------------------------|
-| `/register`               | POST   | `users` (insert)                                     |
-| `/login`                  | POST   | `users` (select)                                     |
-| `/session_memory`         | GET    | `user_session_memory` + `user_conversation_summary`  |
-| `/session_memory`         | DELETE | `user_session_memory` + `user_conversation_summary`  |
-| `/check_session_memory`   | POST   | `user_session_memory` (select for context)           |
-| `/process_query`          | POST   | `user_session_memory` (insert) + `user_conversation_summary` (upsert) + `user_documents` (select) |
-| `/upload_attachment`      | POST   | `user_documents` (upsert)                            |
-| `/list_attachments`       | GET    | `user_documents` (select)                            |
-| `/remove_attachment`      | DELETE | `user_documents` (delete)                            |
-
-Every endpoint that touches per-user data requires an `email` parameter (query param for GET/DELETE, body field for POST).
+The P0 model still accepts caller-supplied email as identity. P1 must replace
+that with authenticated server-side identity before deployment.

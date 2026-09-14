@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "scripts": {"test:browser": "node tests/browser_e2e.js"},
+  "devDependencies": {"playwright-core": "1.55.0"}
+}

@@ -1,4 +1,5 @@
 from helper_functions import *
+from conversation_store import append_turn
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -15,8 +16,6 @@ from urllib.parse import unquote
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
-
-from helper_functions import * 
 
 import heapq
 import hashlib
@@ -53,24 +52,50 @@ def create_tables():
     try:
         cursor = connection.cursor()
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                email VARCHAR(255) PRIMARY KEY,
+                password VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                conversation_id VARCHAR(36) PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                title VARCHAR(255),
+                next_query_number INT NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_conversations_email (email),
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_session_memory (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 email VARCHAR(255) NOT NULL,
-                session_id VARCHAR(255),
+                conversation_id VARCHAR(36) NOT NULL,
+                query_number INT NOT NULL,
+                request_id VARCHAR(36),
                 raw_question TEXT,
                 standalone_question TEXT,
                 answer LONGTEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_email (email),
-                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+                UNIQUE KEY uq_conversation_query (conversation_id, query_number),
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
             )
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_conversation_summary (
-                email VARCHAR(255) PRIMARY KEY,
-                summary LONGTEXT NOT NULL DEFAULT '',
+                email VARCHAR(255) NOT NULL,
+                conversation_id VARCHAR(36) NOT NULL,
+                summary LONGTEXT NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+                PRIMARY KEY (email, conversation_id),
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
             )
         """)
         cursor.execute("""
@@ -93,7 +118,7 @@ def create_tables():
 class QueryModel(BaseModel):
     user_query: str
     email: str
-    session_memory: List[dict] = []
+    conversation_id: Optional[str] = None
 
 class AuthModel(BaseModel):
     email: str
@@ -174,28 +199,44 @@ async def sim_search(question:str):
    result = await sim_score(decoded_query)
    return result
 
-@app.get("/db_get/{query:str}")
-async def db_get_endpoint(query: str):
-   decoded_query = unquote(query)
-   result = await query_db_final(decoded_query)
+@app.post("/cached_answer")
+async def cached_answer(query: QueryModel):
+    conversation_id = query.conversation_id
+    if conversation_id and not conversation_belongs_to(query.email, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
 
-   # A cache hit is still a turn in the conversation, so record it the same way
-   # the full pipeline does — otherwise the next follow-up has no context for it.
-   cached_answer = None
-   if result:
-      try:
-         cached_answer = json.loads(result[0][1]).get("end_output")
-      except (IndexError, TypeError, ValueError) as e:
-         logging.info(f"[SESSION MEMORY] /db_get hit but answer could not be parsed: {e}")
-   if cached_answer:
-      append_session_memory({
-         "session_id": str(uuid.uuid4()),
-         "raw_question": decoded_query,
-         "standalone_question": decoded_query,
-         "answer": cached_answer
-      })
+    # Cache lookup uses the literal question. Context rewriting belongs only to
+    # the generation path, so a cache miss cannot invoke the rewrite model twice.
+    standalone_question = query.user_query
+    result = await query_db_final(standalone_question)
+    if not result:
+        raise HTTPException(status_code=404, detail="Cached answer not found.")
 
-   return result
+    if not conversation_id:
+        conversation_id = create_conversation(query.email, query.user_query[:120])
+    request_id = str(uuid.uuid4())
+    cached_payload = result[0][1]
+    try:
+        cached_answer_text = json.loads(cached_payload)["end_output"]
+    except (TypeError, ValueError, KeyError, IndexError):
+        raise HTTPException(status_code=500, detail="Cached answer has an invalid format.")
+    append_session_memory(query.email, conversation_id, {
+        "request_id": request_id,
+        "raw_question": query.user_query,
+        "standalone_question": standalone_question,
+        "answer": cached_answer_text,
+    })
+    summary = update_conversation_summary(
+        get_conversation_summary(query.email, conversation_id),
+        standalone_question,
+        cached_answer_text,
+    )
+    set_conversation_summary(query.email, conversation_id, summary)
+    return {
+        "cached_payload": cached_payload,
+        "conversation_id": conversation_id,
+        "request_id": request_id,
+    }
 
 @app.get("/check_valid/{question:str}")
 async def check_valid(question:str):
@@ -211,98 +252,128 @@ async def check_valid(question:str):
     final_output = "good"
    return {"response" : final_output}
 
-def get_session_memory(email: str):
+def create_conversation(email: str, title: Optional[str] = None) -> str:
+    conversation_id = str(uuid.uuid4())
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO conversations (conversation_id, email, title) VALUES (%s, %s, %s)",
+            (conversation_id, email, title),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return conversation_id
+
+def conversation_belongs_to(email: str, conversation_id: str) -> bool:
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT 1 FROM conversations WHERE conversation_id = %s AND email = %s",
+            (conversation_id, email),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        connection.close()
+
+def get_session_memory(email: str, conversation_id: str):
     connection = _get_db_connection()
     try:
         cursor = connection.cursor(dictionary=True)
         cursor.execute(
-            "SELECT session_id, raw_question, standalone_question, answer FROM user_session_memory WHERE email = %s ORDER BY id",
-            (email,)
+            "SELECT query_number, request_id, raw_question, standalone_question, answer "
+            "FROM user_session_memory WHERE email = %s AND conversation_id = %s ORDER BY query_number",
+            (email, conversation_id),
         )
         return cursor.fetchall()
     finally:
         connection.close()
 
-def get_conversation_summary(email: str):
+def get_conversation_summary(email: str, conversation_id: str):
     connection = _get_db_connection()
     try:
         cursor = connection.cursor()
-        cursor.execute("SELECT summary FROM user_conversation_summary WHERE email = %s", (email,))
+        cursor.execute(
+            "SELECT summary FROM user_conversation_summary WHERE email = %s AND conversation_id = %s",
+            (email, conversation_id),
+        )
         row = cursor.fetchone()
         return row[0] if row else ""
     finally:
         connection.close()
 
-def set_conversation_summary(email: str, summary: str):
+def set_conversation_summary(email: str, conversation_id: str, summary: str):
     connection = _get_db_connection()
     try:
         cursor = connection.cursor()
         cursor.execute(
-            "INSERT INTO user_conversation_summary (email, summary) VALUES (%s, %s) ON DUPLICATE KEY UPDATE summary = %s",
-            (email, summary, summary)
+            "INSERT INTO user_conversation_summary (email, conversation_id, summary) VALUES (%s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE summary = %s",
+            (email, conversation_id, summary, summary),
         )
         connection.commit()
     finally:
         connection.close()
-    logging.info(f"[SESSION MEMORY] Conversation summary updated for {email} | length={len(summary)}")
 
-def append_session_memory(email: str, entry: dict):
+def append_session_memory(email: str, conversation_id: str, entry: dict):
+    return append_turn(_get_db_connection, email, conversation_id, entry)
+
+@app.post("/conversations")
+async def new_conversation(email: str = Query(...)):
+    return {"conversation_id": create_conversation(email)}
+
+@app.get("/conversations")
+async def list_conversations(email: str = Query(...)):
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT conversation_id, title, created_at, updated_at FROM conversations WHERE email = %s ORDER BY updated_at DESC", (email,))
+        return {"conversations": cursor.fetchall()}
+    finally:
+        connection.close()
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, email: str = Query(...)):
     connection = _get_db_connection()
     try:
         cursor = connection.cursor()
         cursor.execute(
-            "INSERT INTO user_session_memory (email, session_id, raw_question, standalone_question, answer) VALUES (%s, %s, %s, %s, %s)",
-            (email, entry.get("session_id"), entry.get("raw_question"), entry.get("standalone_question"), entry.get("answer"))
+            "DELETE FROM conversations WHERE conversation_id = %s AND email = %s",
+            (conversation_id, email),
         )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
         connection.commit()
     finally:
         connection.close()
-    logging.info(f"[SESSION MEMORY] Appended entry for {email}")
-
-def clear_session_memory(email: str):
-    connection = _get_db_connection()
-    try:
-        cursor = connection.cursor()
-        cursor.execute("DELETE FROM user_session_memory WHERE email = %s", (email,))
-        cursor.execute("DELETE FROM user_conversation_summary WHERE email = %s", (email,))
-        connection.commit()
-    finally:
-        connection.close()
-    logging.info(f"[SESSION MEMORY] Cleared memory for {email}")
+    return {"status": "ok"}
 
 @app.get("/session_memory")
-async def read_session_memory(email: str = Query(...)):
-    entries = get_session_memory(email)
-    summary = get_conversation_summary(email)
-    return JSONResponse({
-        "entries": entries,
-        "count": len(entries),
-        "conversation_summary": summary,
-    })
+async def read_session_memory(email: str = Query(...), conversation_id: str = Query(...)):
+    if not conversation_belongs_to(email, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    entries = get_session_memory(email, conversation_id)
+    return {"entries": entries, "count": len(entries), "conversation_summary": get_conversation_summary(email, conversation_id)}
 
 @app.delete("/session_memory")
-async def reset_session_memory(email: str = Query(...)):
-    clear_session_memory(email)
-    return JSONResponse({"status": "ok"})
-
-class SessionMemoryCheckModel(BaseModel):
-    user_query: str
-    email: str
-    session_memory: List[dict] = []
-
-@app.post("/check_session_memory")
-async def check_session_memory(body: SessionMemoryCheckModel):
-    history = get_session_memory(body.email)
-    logging.info(f"[SESSION MEMORY] /check_session_memory called | email={body.email} | session_memory_empty={len(history) == 0} | history_length={len(history)}")
-    if not history:
-        logging.info("[SESSION MEMORY] Session memory is EMPTY — skipping check, going to normal flow")
-        return JSONResponse({"answered": False, "answer": None})
-    standalone_q = generate_standalone_question(body.user_query, history)
-
-    can_answer, answer = False, None
-
-    logging.info(f"[SESSION MEMORY] can_answer={can_answer} | standalone_q='{standalone_q}'")
-    return JSONResponse({"answered": can_answer, "answer": answer, "standalone_question": standalone_q})
+async def reset_session_memory(email: str = Query(...), conversation_id: str = Query(...)):
+    if not conversation_belongs_to(email, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    connection = _get_db_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM user_session_memory WHERE email = %s AND conversation_id = %s", (email, conversation_id))
+        cursor.execute("DELETE FROM user_conversation_summary WHERE email = %s AND conversation_id = %s", (email, conversation_id))
+        cursor.execute(
+            "UPDATE conversations SET next_query_number = 1 WHERE email = %s AND conversation_id = %s",
+            (email, conversation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"status": "ok"}
 
 @app.post("/upload_attachment")
 async def upload_attachment(attachment: UploadFile = File(...), email: str = Form(...)):
@@ -346,28 +417,32 @@ async def remove_attachment(filename: str = Query(...), email: str = Query(...))
 @app.post("/process_query")
 async def process_query(background_tasks: BackgroundTasks, query: QueryModel):
     request_id = str(uuid.uuid4())
-    update_queues[request_id]  # create the queue before the SSE client connects
-    background_tasks.add_task(process_user_query, query.user_query, request_id, query.email)
-    return JSONResponse({"session_id": request_id})
+    conversation_id = query.conversation_id
+    if conversation_id and not conversation_belongs_to(query.email, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if not conversation_id:
+        conversation_id = create_conversation(query.email, query.user_query[:120])
+    update_queues[request_id]
+    background_tasks.add_task(process_user_query, query.user_query, request_id, query.email, conversation_id)
+    return JSONResponse({"request_id": request_id, "conversation_id": conversation_id})
 
 @app.get("/sse")
-async def sse(session_id: str = Query(default=None)):
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    return EventSourceResponse(event_generator(session_id))
+async def sse(request_id: str = Query(default=None)):
+    if not request_id:
+        raise HTTPException(status_code=400, detail="request_id is required")
+    return EventSourceResponse(event_generator(request_id))
 
-async def event_generator(session_id: str):
-    queue = update_queues[session_id]
+async def event_generator(request_id: str):
+    queue = update_queues[request_id]
     try:
         while True:
             data = await queue.get()
-            if isinstance(data, dict) and "final_output" in data:
-                yield {"event": "message", "data": json.dumps(data)}
-                break
-            else:
+            if isinstance(data, dict) and "end_output" in data:
                 yield {"event": "message", "data": json.dumps({"update": data})}
+                break
+            yield {"event": "message", "data": json.dumps({"update": data})}
     finally:
-        del update_queues[session_id]
+        update_queues.pop(request_id, None)
 
 def check_attachment_exists(email: str):
     connection = _get_db_connection()
@@ -388,8 +463,8 @@ def get_user_documents(email: str):
     finally:
         connection.close()
 
-def process_user_query(user_query, session_id, email):
-    session_memory = get_session_memory(email)
+def process_user_query(user_query, request_id, email, conversation_id):
+    session_memory = get_session_memory(email, conversation_id)
     raw_question = user_query
 
     if session_memory:
@@ -421,18 +496,18 @@ def process_user_query(user_query, session_id, email):
                 "citations_obj": [],
                 "citations": [],
                 "session_memory_entry": {
-                    "session_id": session_id,
+                    "request_id": request_id,
                     "raw_question": raw_question,
                     "standalone_question": user_query,
                     "answer": attachment_answer
                 }
             }
-            append_session_memory(email, return_obj["session_memory_entry"])
+            append_session_memory(email, conversation_id, return_obj["session_memory_entry"])
             conversation_summary = update_conversation_summary(
-                get_conversation_summary(email), user_query, attachment_answer
+                get_conversation_summary(email, conversation_id), user_query, attachment_answer
             )
-            set_conversation_summary(email, conversation_summary)
-            loop.run_until_complete(send_update(session_id, return_obj))
+            set_conversation_summary(email, conversation_id, conversation_summary)
+            loop.run_until_complete(send_update(request_id, return_obj))
             return return_obj
         else:
             logging.info("[ATTACHMENT] Attachment insufficient — falling through to PubMed pipeline")
@@ -451,21 +526,21 @@ def process_user_query(user_query, session_id, email):
 
     print("Generated PubMed queries")
     print(query_list)
-    loop.run_until_complete(send_update(session_id, "Generated PubMed queries..."))
+    loop.run_until_complete(send_update(request_id, "Generated PubMed queries..."))
     # Article Retrieval
     start_api = time.time()
     deduplicated_articles_collected = collect_articles(query_list)
     end_api = time.time()
 
     print("Retrieved Articles")
-    loop.run_until_complete(send_update(session_id, f"Retrieved {len(deduplicated_articles_collected)} Articles..."))
+    loop.run_until_complete(send_update(request_id, f"Retrieved {len(deduplicated_articles_collected)} Articles..."))
     # Relevance Classifier
     start_relevant = time.time()
     relevant_articles, irrelevant_articles = concurrent_relevance_classification(deduplicated_articles_collected, pipeline_query)
     end_relevant = time.time()
 
     print("relevant articles")
-    loop.run_until_complete(send_update(session_id, f"Classified {len(relevant_articles)} Relevant Articles..."))
+    loop.run_until_complete(send_update(request_id, f"Classified {len(relevant_articles)} Relevant Articles..."))
 
     # Article Match
     start_processing = time.time()
@@ -486,7 +561,7 @@ def process_user_query(user_query, session_id, email):
     end_processing = time.time()
 
     print(f"Processed {len(all_relevant_articles)} Articles...")
-    loop.run_until_complete(send_update(session_id, f"Processed {len(all_relevant_articles)} Articles..."))
+    loop.run_until_complete(send_update(request_id, f"Processed {len(all_relevant_articles)} Articles..."))
 
     # Final Output
     start_output = time.time()
@@ -543,50 +618,27 @@ def process_user_query(user_query, session_id, email):
     return_obj["citations"] = citations
     
     session_memory_entry = {
-        "session_id": session_id,
+        "request_id": request_id,
         "raw_question": raw_question,
         "standalone_question": user_query,
         "answer": final_output
     }
-    append_session_memory(email, session_memory_entry)
+    append_session_memory(email, conversation_id, session_memory_entry)
     return_obj["session_memory_entry"] = session_memory_entry
-    logging.info(f"[SESSION MEMORY] Entry created | session_id={session_id} | email={email}")
+    logging.info(f"[SESSION MEMORY] Entry created | request_id={request_id} | email={email}")
 
     conversation_summary = update_conversation_summary(
-        get_conversation_summary(email), user_query, final_output
+        get_conversation_summary(email, conversation_id), user_query, final_output
     )
-    set_conversation_summary(email, conversation_summary)
+    set_conversation_summary(email, conversation_id, conversation_summary)
 
-    loop.run_until_complete(send_update(session_id, return_obj))
-
-    return return_obj
-
-def process_attachment_query(user_query, session_id, email):
-    documents = get_user_documents(email)
-    document_text = "\n\n".join(f"Document: {name}\n{content}" for name, content in documents.items())
-
-    final_output = generate_attachment_response(document_text, [], user_query)
-
-    return_obj = {
-        "end_output": final_output,
-        "relevant_articles": [],
-        "citations_obj": [],
-        "citations": [],
-        "session_memory_entry": {
-            "session_id": session_id,
-            "raw_question": user_query,
-            "standalone_question": user_query,
-            "answer": final_output
-        }
-    }
-
-    loop.run_until_complete(send_update(session_id, return_obj))
+    loop.run_until_complete(send_update(request_id, return_obj))
 
     return return_obj
 
-async def send_update(session_id, data):
-    if session_id in update_queues:
-        await update_queues[session_id].put(data)
+async def send_update(request_id, data):
+    if request_id in update_queues:
+        await update_queues[request_id].put(data)
 
 async def query_db_final(query: str):
    load_dotenv("ATT81274.env")
@@ -598,15 +650,13 @@ async def query_db_final(query: str):
     database=os.getenv('database')
     )
 
-   mycursor = mydb.cursor()
-   sql = f"SELECT * FROM question_answer WHERE question = '{query}'"
-
-   mycursor.execute(sql)
-
-   myresult = mycursor.fetchall()
-   with open("output.json", "w") as f:
-      json.dump(myresult, f, indent=4)
-   return myresult
+   try:
+      mycursor = mydb.cursor()
+      sql = "SELECT * FROM question_answer WHERE question = %s"
+      mycursor.execute(sql, (query,))
+      return mycursor.fetchall()
+   finally:
+      mydb.close()
 
 
 async def sim_score(question: str):

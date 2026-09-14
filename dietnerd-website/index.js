@@ -5,6 +5,42 @@ function getUserEmail() {
     return sessionStorage.getItem('dietnerd_user') || '';
 }
 
+function getConversationId() {
+    return sessionStorage.getItem('dietnerd_conversation_id') || null;
+}
+
+async function refreshConversationList() {
+    const select = document.getElementById('conversation-select');
+    const currentId = getConversationId() || '';
+    const response = await fetch(`${baseURL}/conversations?email=${encodeURIComponent(getUserEmail())}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    select.innerHTML = '<option value="">New conversation</option>';
+    (data.conversations || []).forEach((conversation) => {
+        const option = document.createElement('option');
+        option.value = conversation.conversation_id;
+        option.textContent = conversation.title || 'Untitled conversation';
+        select.appendChild(option);
+    });
+    select.value = currentId;
+}
+
+async function renderSelectedConversation(conversationId) {
+    if (!conversationId) return;
+    const response = await fetch(
+        `${baseURL}/session_memory?email=${encodeURIComponent(getUserEmail())}&conversation_id=${encodeURIComponent(conversationId)}`,
+    );
+    if (!response.ok) return;
+    const data = await response.json();
+    const entries = data.entries || [];
+    const latest = entries[entries.length - 1];
+    if (!latest) return;
+    document.getElementById('question').value = latest.raw_question || '';
+    document.getElementById('results').style.display = 'flex';
+    document.getElementById('output').innerHTML = formatText(latest.answer || '');
+    document.getElementById('references').innerHTML = 'References are available when an answer is generated or loaded from cache.';
+}
+
 const disclaimer = `
 DietNerd is an exploratory tool designed to enrich your conversations with a registered dietitian or registered dietitian nutritionist, who can then review your profile before providing recommendations.
 Please be aware that the insights provided by DietNerd may not fully take into consideration all potential medication interactions or pre-existing conditions.
@@ -42,33 +78,26 @@ async function check_valid(userQuery) {
  */
 const getAnswer = async (question) => {
     try {
-        const queryUrl = `${baseURL}/db_get/${encodeURIComponent(question)}`;
-        const response = await fetch(queryUrl);
-        
+        const response = await fetch(`${baseURL}/cached_answer`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                user_query: question,
+                email: getUserEmail(),
+                conversation_id: getConversationId(),
+            }),
+        });
         if (!response.ok) {
-            throw new Error('Network response was not ok');
+            throw new Error('Cached answer not found');
         }
-
         const result = await response.json();
-        console.log(result)
-        let output = JSON.parse(result[0][1]).end_output;
-        output = output.replace(/(^|\n)(\d+)\.\s/g, '\n\n$2. ');
-
-        const citations_obj = JSON.parse(result[0][1]).citations_obj;
-        const allArticles = JSON.parse(result[0][1]).relevent_articles
-        let citations = JSON.parse(result[0][1])
-        citations = JSON.stringify(citations.citations)
-        console.log(citations_obj)
-        // Assuming the result has the reference information you need
-        // TEMPORARILY DISABLED — citations in localStorage are only written on this
-        // cache-hit path, never by runGeneration, so a fresh profile leaves them null
-        // and formatReferences throws. Re-enable together with the block in formatReferences.
-        // localStorage.setItem('referenceObject', JSON.stringify(citations_obj));
-        // localStorage.setItem('citations', citations);
-        // localStorage.setItem('allArticles', JSON.stringify(allArticles));
-
-
-        return output;
+        sessionStorage.setItem('dietnerd_conversation_id', result.conversation_id);
+        await refreshConversationList();
+        const cached = JSON.parse(result.cached_payload);
+        localStorage.setItem('referenceObject', JSON.stringify(cached.citations_obj || {}));
+        localStorage.setItem('citations', JSON.stringify(cached.citations || []));
+        localStorage.setItem('allArticles', JSON.stringify(cached.relevant_articles || cached.relevent_articles || []));
+        return cached.end_output.replace(/(^|\n)(\d+)\.\s/g, '\n\n$2. ');
     } catch (err) {
         console.error('Fetch error:', err);
         throw err;
@@ -152,13 +181,8 @@ function parseCitation(citation) {
  * @return {string} The formatted references as a string.
  */
 const formatReferences = (output) => {
-    // TEMPORARILY DISABLED — see the matching block in getAnswer. These keys are null
-    // on the fresh-generation path, so findCitation(ref, null) throws and takes the
-    // whole answer render down with it. Bail out until citations are stored on both paths.
-    return 'No references available.';
-
-    // const citations = JSON.parse(localStorage.getItem('citations'));
-    // const citationObj = JSON.parse(localStorage.getItem('referenceObject'));
+    const citations = JSON.parse(localStorage.getItem('citations') || '[]');
+    const citationObj = JSON.parse(localStorage.getItem('referenceObject') || '{}');
     const references = extractReferences(output);
 
     console.log("REFERENCES", references);
@@ -474,6 +498,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const existingAttachmentsElement = document.getElementById('existing-attachments');
 
     refreshExistingAttachments();
+    refreshConversationList();
 
     fileInput.addEventListener('change', async function () {
         if (fileInput.files.length > 0) {
@@ -548,22 +573,29 @@ async function runGeneration(userQuery) {
 
     return new Promise(async (resolve, reject) => {
         try {
-            // First, send the query and get the session_id
+            // Start the query. request_id correlates SSE only; conversation_id persists turns.
             const response = await fetch(`${baseURL}/process_query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ user_query: userQuery, email: getUserEmail(), session_memory: [] }),
+                body: JSON.stringify({
+                    user_query: userQuery,
+                    email: getUserEmail(),
+                    conversation_id: getConversationId(),
+                }),
             });
+            if (!response.ok) {
+                throw new Error(`Query request failed (${response.status})`);
+            }
             const data = await response.json();
-            const sessionId = data.session_id;
+            const requestId = data.request_id;
+            sessionStorage.setItem('dietnerd_conversation_id', data.conversation_id);
+            await refreshConversationList();
 
-            answerElement.innerText += `Got session_id: ${sessionId}\n`;
-            console.log("Got session_id:", sessionId);
-            
-            // Now, connect to the SSE endpoint with the session_id
-            const eventSource = new EventSource(`${baseURL}/sse?session_id=${sessionId}`);
+            console.log("Got request_id:", requestId);
+
+            const eventSource = new EventSource(`${baseURL}/sse?request_id=${requestId}`);
 
             eventSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
@@ -573,6 +605,9 @@ async function runGeneration(userQuery) {
                     
                     // Check if this is the final update
                     if (data.update.end_output) {
+                        localStorage.setItem('referenceObject', JSON.stringify(data.update.citations_obj || {}));
+                        localStorage.setItem('citations', JSON.stringify(data.update.citations || []));
+                        localStorage.setItem('allArticles', JSON.stringify(data.update.relevant_articles || []));
                         console.log("Received final update. Closing EventSource.");
                         eventSource.close();
                         resolve(data.update); // Resolve with the full update object
@@ -629,29 +664,7 @@ document.getElementById('submit').addEventListener('click', async (event) => {
             return;
         }
 
-        // Always check session memory via the backend (memory is stored in the DB per user)
-        try {
-                const sessionRes = await fetch(`${baseURL}/check_session_memory`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_query: question, email: getUserEmail(), session_memory: [] })
-                });
-                const sessionData = await sessionRes.json();
-                console.log('[SESSION MEMORY] check result:', sessionData);
-                if (sessionData.answered) {
-                    console.log('[SESSION MEMORY] Answered from session memory — skipping DB and pipeline');
-                    resultsElement.style.display = 'flex';
-                    answerElement.innerHTML = formatText(sessionData.answer);
-                    referencesElement.innerHTML = '';
-                    hintElement.textContent = '';
-                    generatePdfButton.classList.remove("hidden");
-                    exampleQuestions.classList.add('hidden');
-                    localStorage.setItem('rawOutput', sessionData.answer);
-                    return;
-                }
-        } catch (err) {
-            console.log('[SESSION MEMORY] check failed, proceeding to normal flow:', err);
-        }
+        // Standalone-question rewriting happens once inside /process_query.
 
         try {
             const answer = await getAnswer(question);
@@ -732,6 +745,41 @@ document.getElementById('submit').addEventListener('click', async (event) => {
     }
 });
 
+
+document.getElementById('conversation-select').addEventListener('change', async (event) => {
+    const conversationId = event.target.value;
+    if (!conversationId) {
+        document.getElementById('new-conversation').click();
+        return;
+    }
+    sessionStorage.setItem('dietnerd_conversation_id', conversationId);
+    await renderSelectedConversation(conversationId);
+});
+
+document.getElementById('new-conversation').addEventListener('click', () => {
+    sessionStorage.removeItem('dietnerd_conversation_id');
+    document.getElementById('conversation-select').value = '';
+    document.getElementById('question').value = '';
+    document.getElementById('results').style.display = 'none';
+    document.getElementById('similarQuestions').style.display = 'none';
+    document.querySelector('.hint').textContent = '';
+});
+
+document.getElementById('delete-conversation').addEventListener('click', async () => {
+    const conversationId = getConversationId();
+    if (!conversationId) return;
+    const response = await fetch(
+        `${baseURL}/conversations/${encodeURIComponent(conversationId)}?email=${encodeURIComponent(getUserEmail())}`,
+        {method: 'DELETE'},
+    );
+    if (!response.ok) {
+        console.error('Failed to delete conversation');
+        return;
+    }
+    sessionStorage.removeItem('dietnerd_conversation_id');
+    document.getElementById('new-conversation').click();
+    await refreshConversationList();
+});
 
 document.getElementById('generate-pdf-button').addEventListener('click', async(event) => {
     generatePDF();

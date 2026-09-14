@@ -29,6 +29,14 @@
         
         <h2>We answer your diet and nutrition questions based on the strongest scientific evidence</h2>
         <p class="disclaimer"><br><i><strong>Disclaimer:</strong> DietNerd is an exploratory tool designed to enrich your conversations with a registered dietitian or registered dietitian nutritionist, who can then review your profile before providing recommendations. Please be aware that the insights provided by DietNerd may not fully take into consideration all potential medication interactions or pre-existing conditions.<br><a href="https://www.eatright.org/find-a-nutrition-expert" target="_blank">Find a local expert near you.</a></i></p>
+        <div class="conversation-controls">
+            <label for="conversation-select">Conversation</label>
+            <select id="conversation-select">
+                <option value="">New conversation</option>
+            </select>
+            <button type="button" id="new-conversation">New conversation</button>
+            <button type="button" id="delete-conversation">Delete conversation</button>
+        </div>
         <div class="input-container">
             <label for="question" class="visually-hidden">Enter your diet-based question</label>
             <input type="text" id="question" placeholder="Enter your question here...">
@@ -69,6 +77,7 @@
         document.getElementById('logout-link').addEventListener('click', function(e) {
             e.preventDefault();
             sessionStorage.removeItem('dietnerd_user');
+            sessionStorage.removeItem('dietnerd_conversation_id');
             window.location.href = 'login.html';
         });
     </script>
