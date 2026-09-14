@@ -9,6 +9,80 @@ function getConversationId() {
     return sessionStorage.getItem('dietnerd_conversation_id') || null;
 }
 
+function clearChatThread() {
+    document.getElementById('chat-thread').innerHTML = '';
+}
+
+function enterConversationMode() {
+    document.body.classList.add('conversation-mode');
+}
+
+function closeSourcesPanel() {
+    const shell = document.querySelector('.chat-shell');
+    const panel = document.getElementById('sources-panel');
+    shell.classList.remove('sources-open');
+    panel.setAttribute('aria-hidden', 'true');
+}
+
+function openSourcesPanel(references) {
+    const shell = document.querySelector('.chat-shell');
+    const panel = document.getElementById('sources-panel');
+    const content = document.getElementById('sources-panel-content');
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = references;
+    const entries = Array.from(wrapper.querySelectorAll('a'));
+    content.innerHTML = '';
+    if (entries.length) {
+        entries.forEach((entry, index) => {
+            const card = document.createElement('article');
+            card.className = 'source-card';
+            const label = document.createElement('span');
+            label.className = 'sources-kicker';
+            label.textContent = `Source ${index + 1}`;
+            card.append(label, entry.cloneNode(true));
+            const detail = entry.nextSibling;
+            if (detail && detail.textContent.trim()) {
+                const note = document.createElement('p');
+                note.textContent = detail.textContent.replace(/^\s*-\s*/, '');
+                card.appendChild(note);
+            }
+            content.appendChild(card);
+        });
+    } else {
+        const card = document.createElement('article');
+        card.className = 'source-card';
+        card.innerHTML = references;
+        content.appendChild(card);
+    }
+    shell.classList.add('sources-open');
+    panel.setAttribute('aria-hidden', 'false');
+}
+
+function appendChatMessage(role, text, references = '') {
+    const thread = document.getElementById('chat-thread');
+    const article = document.createElement('article');
+    article.className = `chat-message ${role}`;
+    const avatar = document.createElement('span');
+    avatar.className = `${role}-avatar`;
+    avatar.textContent = role === 'assistant' ? 'D' : 'You';
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    content.innerHTML = role === 'assistant' ? formatText(text) : text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    article.append(avatar, content);
+    if (references && references !== 'No references available.') {
+        const sourceButton = document.createElement('button');
+        sourceButton.type = 'button';
+        sourceButton.className = 'message-sources-button';
+        sourceButton.textContent = 'View sources';
+        sourceButton.addEventListener('click', () => openSourcesPanel(references));
+        content.appendChild(sourceButton);
+    }
+    thread.appendChild(article);
+    enterConversationMode();
+    thread.scrollTop = thread.scrollHeight;
+    return content;
+}
+
 async function refreshConversationList() {
     const select = document.getElementById('conversation-select');
     const currentId = getConversationId() || '';
@@ -27,18 +101,19 @@ async function refreshConversationList() {
 
 async function renderSelectedConversation(conversationId) {
     if (!conversationId) return;
+    enterConversationMode();
     const response = await fetch(
         `${baseURL}/session_memory?email=${encodeURIComponent(getUserEmail())}&conversation_id=${encodeURIComponent(conversationId)}`,
     );
     if (!response.ok) return;
     const data = await response.json();
     const entries = data.entries || [];
-    const latest = entries[entries.length - 1];
-    if (!latest) return;
-    document.getElementById('question').value = latest.raw_question || '';
-    document.getElementById('results').style.display = 'flex';
-    document.getElementById('output').innerHTML = formatText(latest.answer || '');
-    document.getElementById('references').innerHTML = 'References are available when an answer is generated or loaded from cache.';
+    clearChatThread();
+    entries.forEach((entry) => {
+        appendChatMessage('user', entry.raw_question || '');
+        appendChatMessage('assistant', entry.answer || '');
+    });
+    document.getElementById('question').value = '';
 }
 
 const disclaimer = `
@@ -557,6 +632,7 @@ async function answerFromAttachment(question) {
     try {
         const result = await runGeneration(question);
         const answer = result.end_output;
+        appendChatMessage('assistant', answer, formatReferences(answer));
         answerElement.innerHTML = formatText(answer);
         referencesElement.innerHTML = formatReferences(answer);
         localStorage.setItem('rawOutput', answer);
@@ -656,6 +732,8 @@ document.getElementById('submit').addEventListener('click', async (event) => {
     resultsElement.style.display = 'none'
     similarQuestionsContainer.style.display = 'none'
     if (question) {
+        appendChatMessage('user', question);
+        document.getElementById('question').value = '';
         answerElement.innerHTML = '';
         referencesElement.innerHTML = '';
 
@@ -674,6 +752,7 @@ document.getElementById('submit').addEventListener('click', async (event) => {
             const formattedAnswer = formatText(answer);
             const formattedReferences = formatReferences(answer);
             localStorage.setItem('rawOutput', answer);
+            appendChatMessage('assistant', answer, formattedReferences);
             answerElement.innerHTML = formattedAnswer;
             referencesElement.innerHTML = formattedReferences;
             hintElement.textContent = '';
@@ -723,6 +802,7 @@ document.getElementById('submit').addEventListener('click', async (event) => {
                     const answer = result.end_output;
                     resultsElement.style.display = 'flex';
                     similarQuestionsContainer.style.display = 'none';
+                    appendChatMessage('assistant', answer, formatReferences(answer));
                     answerElement.innerHTML = formatText(answer);
                     referencesElement.innerHTML = formatReferences(answer);
                     localStorage.setItem('rawOutput', answer);
@@ -757,9 +837,12 @@ document.getElementById('conversation-select').addEventListener('change', async 
 });
 
 document.getElementById('new-conversation').addEventListener('click', () => {
+    enterConversationMode();
+    closeSourcesPanel();
     sessionStorage.removeItem('dietnerd_conversation_id');
     document.getElementById('conversation-select').value = '';
     document.getElementById('question').value = '';
+    document.getElementById('chat-thread').innerHTML = '<div class="welcome-message"><span class="assistant-avatar">D</span><div><h2>Start a new conversation</h2><p>Ask a diet or nutrition question to begin.</p></div></div>';
     document.getElementById('results').style.display = 'none';
     document.getElementById('similarQuestions').style.display = 'none';
     document.querySelector('.hint').textContent = '';
@@ -805,3 +888,9 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+const composerInput = document.getElementById('question');
+composerInput.addEventListener('input', () => { composerInput.style.height = 'auto'; composerInput.style.height = `${Math.min(composerInput.scrollHeight, 140)}px`; });
+
+document.getElementById('close-sources').addEventListener('click', closeSourcesPanel);
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSourcesPanel(); });
+if (getConversationId()) enterConversationMode();

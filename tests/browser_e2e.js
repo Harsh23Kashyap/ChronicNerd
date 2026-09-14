@@ -28,15 +28,19 @@ const assert = require('assert');
 
   await page.fill('#question', 'cached question');
   await page.click('#submit');
-  await page.waitForFunction(() => document.querySelector('#output').textContent.includes('Cached browser-test answer'));
+  await page.waitForFunction(() => document.querySelector('#chat-thread').textContent.includes('Cached browser-test answer'));
   const firstConversation = await page.evaluate(() => sessionStorage.getItem('dietnerd_conversation_id'));
   assert(firstConversation);
+  assert.equal(await page.locator('.chat-message.user').count(), 1);
+  assert.equal(await page.locator('.chat-message.assistant').count(), 1);
 
   await page.fill('#question', 'what about sleep?');
   await page.click('#submit');
   await page.waitForSelector('#similarQuestions button:last-child');
   await page.click('#similarQuestions button:last-child');
-  await page.waitForFunction(() => document.querySelector('#output').textContent.includes('magnesium on sleep'));
+  await page.waitForFunction(() => document.querySelector('#chat-thread').textContent.includes('magnesium on sleep'));
+  assert.equal(await page.locator('.chat-message.user').count(), 2);
+  assert.equal(await page.locator('.chat-message.assistant').count(), 2);
 
   await page.click('#new-conversation');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('dietnerd_conversation_id')), null);
@@ -44,21 +48,21 @@ const assert = require('assert');
   await page.click('#submit');
   await page.waitForSelector('#similarQuestions button:last-child');
   await page.click('#similarQuestions button:last-child');
-  await page.waitForFunction(() => document.querySelector('#output').textContent.includes('fresh conversation question'));
+  await page.waitForFunction(() => document.querySelector('#chat-thread').textContent.includes('fresh conversation question'));
   const secondConversation = await page.evaluate(() => sessionStorage.getItem('dietnerd_conversation_id'));
   assert(secondConversation && secondConversation !== firstConversation);
 
   await page.selectOption('#conversation-select', firstConversation);
-  await page.waitForFunction(() => document.querySelector('#output').textContent.includes('magnesium on sleep'));
+  await page.waitForFunction(() => document.querySelector('#chat-thread').textContent.includes('magnesium on sleep'));
   await page.selectOption('#conversation-select', secondConversation);
-  await page.waitForFunction(() => document.querySelector('#output').textContent.includes('fresh conversation question'));
+  await page.waitForFunction(() => document.querySelector('#chat-thread').textContent.includes('fresh conversation question'));
 
   fs.writeFileSync('tests/browser-upload.txt', 'Browser upload nutrition facts');
   await page.setInputFiles('#attachment-file', 'tests/browser-upload.txt');
   await page.waitForFunction(() => document.querySelector('#existing-attachments').textContent.includes('browser-upload.txt'));
   await page.fill('#question', 'summarize my upload');
   await page.click('#submit');
-  await page.waitForFunction(() => document.querySelector('#output').textContent.includes('summarize my upload'));
+  await page.waitForFunction(() => document.querySelector('#chat-thread').textContent.includes('summarize my upload'));
   await page.click('[data-filename="browser-upload.txt"]');
   await page.waitForFunction(() => !document.querySelector('#existing-attachments').textContent.includes('browser-upload.txt'));
 

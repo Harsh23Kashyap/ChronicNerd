@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DietNerd</title>
     <link rel="stylesheet" type="text/css" href="index.css">
-    <link href='https://fonts.googleapis.com/css?family=Open Sans' rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
 </head>
 <body>
     <script>
@@ -25,49 +25,72 @@
         <p>Zubair Yacub @ University of Illinois Urbana Champaign</p>
     </div> -->
     <div id="container">
-        <a href="index.html"><img src="assets/dietnerd_logo.png" alt="DietNerd Logo" class="logo"></a>
-        
-        <h2>We answer your diet and nutrition questions based on the strongest scientific evidence</h2>
-        <p class="disclaimer"><br><i><strong>Disclaimer:</strong> DietNerd is an exploratory tool designed to enrich your conversations with a registered dietitian or registered dietitian nutritionist, who can then review your profile before providing recommendations. Please be aware that the insights provided by DietNerd may not fully take into consideration all potential medication interactions or pre-existing conditions.<br><a href="https://www.eatright.org/find-a-nutrition-expert" target="_blank">Find a local expert near you.</a></i></p>
-        <div class="conversation-controls">
-            <label for="conversation-select">Conversation</label>
-            <select id="conversation-select">
-                <option value="">New conversation</option>
-            </select>
-            <button type="button" id="new-conversation">New conversation</button>
-            <button type="button" id="delete-conversation">Delete conversation</button>
-        </div>
-        <div class="input-container">
-            <label for="question" class="visually-hidden">Enter your diet-based question</label>
-            <input type="text" id="question" placeholder="Enter your question here...">
-            <button id="submit">Submit</button>
-        </div>
-        <div class="attachment-row">
-            <input type="file" id="attachment-file" accept=".pdf,.txt,.csv,.json" class="visually-hidden">
-            <button type="button" id="attach-button" onclick="document.getElementById('attachment-file').click()">&#128206; Attach file</button>
-            <span id="attachment-label">No file attached</span>
-        </div>
-        <div id="existing-attachments" class="existing-attachments"></div>
-        <div class id="example-questions">
-            <h3>Example Questions:</h3>
-            <div class="example-question">What diet is recommended for PCOS?</div>
-            <div class="example-question">What are the pros and cons of vitamin b12?</div>
-            <div class="example-question">Does adherence to the Mediterranean dietary pattern reduce asthma symptoms in children?</div>
-        </div>
-        <p class="hint"></p>
-        <div id="results" class="hidden">
-            <div id="output">
-                <textarea readonly placeholder="Answer will load here..."></textarea>
+        <section class="hero">
+            <div class="hero-copy">
+                <span class="eyebrow">Evidence, made understandable</span>
+                <a href="index.html"><img src="assets/dietnerd_logo.png" alt="DietNerd" class="logo"></a>
+                <h1>Better questions.<br><em>Stronger evidence.</em></h1>
+                <p class="hero-text">Explore diet and nutrition research through clear answers grounded in published science.</p>
             </div>
-            <div id="references">
-                <label for="references" class="visually-hidden">References will appear here</label>
-                <textarea id="references" readonly placeholder="References will appear here..."></textarea>
-            </div>
-        </div>
-        <div class="button-container">
-            <button id="generate-pdf-button" class="hidden">Download PDF</button>
-        </div>
-        <div class="similar-questions" id="similarQuestions"></div> <!-- Container for similar questions buttons -->
+            <svg class="evidence-visual" viewBox="0 0 520 360" role="img" aria-label="Scientific evidence network illustration">
+                <defs>
+                    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d7ef72"/><stop offset="1" stop-color="#73b66b"/></linearGradient>
+                    <filter id="soft"><feGaussianBlur stdDeviation="12"/></filter>
+                </defs>
+                <circle cx="260" cy="180" r="138" fill="#f7f1df" stroke="#173f35" stroke-width="2"/>
+                <circle cx="260" cy="180" r="105" fill="none" stroke="#b8cbbf" stroke-width="1" stroke-dasharray="6 10"/>
+                <circle cx="260" cy="180" r="68" fill="#173f35"/>
+                <path d="M238 194c-25-35-11-77 39-87 8 47-5 78-39 87Z" fill="url(#leaf)"/>
+                <path d="M245 190c10-26 24-45 43-58" fill="none" stroke="#173f35" stroke-width="4" stroke-linecap="round"/>
+                <path d="M218 213c26-8 52-7 78 5" fill="none" stroke="#f3aa61" stroke-width="8" stroke-linecap="round"/>
+                <g fill="#fdfbf4" stroke="#173f35" stroke-width="2">
+                    <circle cx="111" cy="104" r="24"/><circle cx="407" cy="96" r="20"/><circle cx="425" cy="254" r="27"/><circle cx="113" cy="261" r="19"/>
+                </g>
+                <g fill="#f3aa61"><circle cx="111" cy="104" r="7"/><circle cx="407" cy="96" r="6"/><circle cx="425" cy="254" r="8"/><circle cx="113" cy="261" r="6"/></g>
+                <g stroke="#173f35" stroke-width="2" opacity=".55"><path d="M130 118 202 158"/><path d="m390 110-74 48"/><path d="m397 242-77-39"/><path d="m131 250 76-45"/></g>
+                <g class="orbit-dot" fill="#d7ef72"><circle cx="260" cy="42" r="7"/><circle cx="398" cy="180" r="5"/><circle cx="260" cy="318" r="6"/><circle cx="122" cy="180" r="5"/></g>
+                <g fill="#173f35" opacity=".18"><circle cx="55" cy="66" r="4"/><circle cx="470" cy="52" r="6"/><circle cx="480" cy="310" r="4"/><circle cx="48" cy="301" r="7"/><circle cx="90" cy="173" r="3"/><circle cx="449" cy="169" r="3"/></g>
+            </svg>
+        </section>
+        <aside class="disclaimer"><strong>Research companion, not medical advice.</strong> DietNerd helps enrich conversations with a registered dietitian and may not account for every medication interaction or health condition. <a href="https://www.eatright.org/find-a-nutrition-expert" target="_blank">Find a nutrition expert</a>.</aside>
+        <main class="chat-shell">
+            <aside class="chat-sidebar">
+                <div class="sidebar-heading"><span>Conversations</span><button type="button" id="new-conversation" class="icon-button" aria-label="New conversation">＋</button></div>
+                <label for="conversation-select" class="visually-hidden">Current conversation</label>
+                <select id="conversation-select"><option value="">New conversation</option></select>
+                <button type="button" id="delete-conversation" class="delete-link">Delete current conversation</button>
+                <div class="sidebar-note"><strong>DietNerd</strong><span>Research answers grounded in published evidence.</span></div>
+            </aside>
+            <section class="chat-panel" aria-labelledby="chat-title">
+                <header class="chat-header"><div><span class="status-dot"></span><strong id="chat-title">DietNerd assistant</strong></div><span>Evidence-focused</span></header>
+                <div id="chat-thread" class="chat-thread" role="log" aria-live="off" aria-relevant="additions">
+                    <div class="welcome-message">
+                        <span class="assistant-avatar">D</span>
+                        <div><h2>What would you like to understand?</h2><p>Ask a diet or nutrition question. I will trace the evidence and explain what the research says.</p>
+                        <div id="example-questions" class="prompt-grid"><button class="example-question">What diet is recommended for PCOS?</button><button class="example-question">What are the pros and cons of vitamin B12?</button><button class="example-question">Does the Mediterranean diet reduce asthma symptoms in children?</button></div></div>
+                    </div>
+                </div>
+                <p class="hint" role="status" aria-live="polite"></p>
+                <div class="similar-questions" id="similarQuestions"></div>
+                <div class="composer-wrap">
+                    <div id="existing-attachments" class="existing-attachments"></div>
+                    <div class="composer">
+                        <input type="file" id="attachment-file" accept=".pdf,.txt,.csv,.json" class="visually-hidden">
+                        <button type="button" id="attach-button" onclick="document.getElementById('attachment-file').click()" aria-label="Attach a file">＋</button>
+                        <label for="question" class="visually-hidden">Message DietNerd</label>
+                        <textarea id="question" rows="1" placeholder="Message DietNerd..."></textarea>
+                        <button id="submit" aria-label="Send message">↑</button>
+                    </div>
+                    <div class="composer-meta"><span id="attachment-label">No file attached</span><span>DietNerd can make mistakes. Check important health information.</span></div>
+                </div>
+                <div id="results" class="hidden"><div id="output"></div><div id="references"></div></div>
+                <div class="button-container"><button id="generate-pdf-button" class="hidden">Download answer</button></div>
+            </section>
+            <aside id="sources-panel" class="sources-panel" aria-labelledby="sources-title" aria-hidden="true">
+                <header class="sources-panel-header"><div><span class="sources-kicker">Evidence library</span><h2 id="sources-title">Sources</h2></div><button type="button" id="close-sources" class="close-sources" aria-label="Close sources">×</button></header>
+                <div id="sources-panel-content" class="sources-panel-content"><p class="sources-empty">Sources for an answer will appear here.</p></div>
+            </aside>
+        </main>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
