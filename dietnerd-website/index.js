@@ -13,6 +13,51 @@ function clearChatThread() {
     document.getElementById('chat-thread').innerHTML = '';
 }
 
+function enterConversationMode() {
+    document.body.classList.add('conversation-mode');
+}
+
+function closeSourcesPanel() {
+    const shell = document.querySelector('.chat-shell');
+    const panel = document.getElementById('sources-panel');
+    shell.classList.remove('sources-open');
+    panel.setAttribute('aria-hidden', 'true');
+}
+
+function openSourcesPanel(references) {
+    const shell = document.querySelector('.chat-shell');
+    const panel = document.getElementById('sources-panel');
+    const content = document.getElementById('sources-panel-content');
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = references;
+    const entries = Array.from(wrapper.querySelectorAll('a'));
+    content.innerHTML = '';
+    if (entries.length) {
+        entries.forEach((entry, index) => {
+            const card = document.createElement('article');
+            card.className = 'source-card';
+            const label = document.createElement('span');
+            label.className = 'sources-kicker';
+            label.textContent = `Source ${index + 1}`;
+            card.append(label, entry.cloneNode(true));
+            const detail = entry.nextSibling;
+            if (detail && detail.textContent.trim()) {
+                const note = document.createElement('p');
+                note.textContent = detail.textContent.replace(/^\s*-\s*/, '');
+                card.appendChild(note);
+            }
+            content.appendChild(card);
+        });
+    } else {
+        const card = document.createElement('article');
+        card.className = 'source-card';
+        card.innerHTML = references;
+        content.appendChild(card);
+    }
+    shell.classList.add('sources-open');
+    panel.setAttribute('aria-hidden', 'false');
+}
+
 function appendChatMessage(role, text, references = '') {
     const thread = document.getElementById('chat-thread');
     const article = document.createElement('article');
@@ -25,12 +70,15 @@ function appendChatMessage(role, text, references = '') {
     content.innerHTML = role === 'assistant' ? formatText(text) : text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
     article.append(avatar, content);
     if (references && references !== 'No references available.') {
-        const source = document.createElement('details');
-        source.className = 'message-sources';
-        source.innerHTML = `<summary>Sources</summary>${references}`;
-        content.appendChild(source);
+        const sourceButton = document.createElement('button');
+        sourceButton.type = 'button';
+        sourceButton.className = 'message-sources-button';
+        sourceButton.textContent = 'View sources';
+        sourceButton.addEventListener('click', () => openSourcesPanel(references));
+        content.appendChild(sourceButton);
     }
     thread.appendChild(article);
+    enterConversationMode();
     thread.scrollTop = thread.scrollHeight;
     return content;
 }
@@ -53,6 +101,7 @@ async function refreshConversationList() {
 
 async function renderSelectedConversation(conversationId) {
     if (!conversationId) return;
+    enterConversationMode();
     const response = await fetch(
         `${baseURL}/session_memory?email=${encodeURIComponent(getUserEmail())}&conversation_id=${encodeURIComponent(conversationId)}`,
     );
@@ -788,6 +837,8 @@ document.getElementById('conversation-select').addEventListener('change', async 
 });
 
 document.getElementById('new-conversation').addEventListener('click', () => {
+    enterConversationMode();
+    closeSourcesPanel();
     sessionStorage.removeItem('dietnerd_conversation_id');
     document.getElementById('conversation-select').value = '';
     document.getElementById('question').value = '';
@@ -839,3 +890,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 const composerInput = document.getElementById('question');
 composerInput.addEventListener('input', () => { composerInput.style.height = 'auto'; composerInput.style.height = `${Math.min(composerInput.scrollHeight, 140)}px`; });
+
+document.getElementById('close-sources').addEventListener('click', closeSourcesPanel);
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSourcesPanel(); });
+if (getConversationId()) enterConversationMode();

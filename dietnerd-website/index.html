@@ -86,6 +86,10 @@
                 <div id="results" class="hidden"><div id="output"></div><div id="references"></div></div>
                 <div class="button-container"><button id="generate-pdf-button" class="hidden">Download answer</button></div>
             </section>
+            <aside id="sources-panel" class="sources-panel" aria-labelledby="sources-title" aria-hidden="true">
+                <header class="sources-panel-header"><div><span class="sources-kicker">Evidence library</span><h2 id="sources-title">Sources</h2></div><button type="button" id="close-sources" class="close-sources" aria-label="Close sources">×</button></header>
+                <div id="sources-panel-content" class="sources-panel-content"><p class="sources-empty">Sources for an answer will appear here.</p></div>
+            </aside>
         </main>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
