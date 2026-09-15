@@ -1,0 +1,24 @@
+# Minimal dependencies for the API, MySQL integration, and browser fixture tests.
+# The production requirements remain in dietnerd-backend/requirements.txt.
+beautifulsoup4==4.12.3
+biopython==1.83
+fastapi==0.110.1
+httpx==0.27.0
+lxml_html_clean==0.1.1
+metapub==0.5.5
+mysql-connector-python==8.3.0
+numpy==1.26.4
+openai==1.18.0
+pandas==2.2.2
+PyMuPDF==1.27.2.3
+pytest==8.1.1
+pytest-asyncio==0.23.8
+python-dotenv==1.0.1
+python-multipart==0.0.9
+requests==2.31.0
+scikit-learn==1.5.2
+scipy==1.13.0
+sse-starlette==1.8.2
+starlette==0.37.2
+tenacity==8.2.3
+uvicorn==0.29.0

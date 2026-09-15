@@ -1,0 +1,15 @@
+services:
+  mysql-test:
+    image: mysql:8.0
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: chronicnerd_test
+    ports:
+      - "127.0.0.1:${CHRONICNERD_TEST_MYSQL_PORT:-33306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/mysql

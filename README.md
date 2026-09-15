@@ -42,3 +42,28 @@ The tool is designed to provide reliable and up-to-date information for individu
 
 DietNerd is an exploratory tool designed to enrich conversations with registered dietitians or registered dietitian nutritionists. The insights provided may not fully consider all potential medication interactions or pre-existing conditions. Always consult with a healthcare professional for personalized advice.
 
+
+## Clean local verification
+
+The API tests use MySQL-specific transactions, foreign keys, and locking, so they should not be replaced with SQLite. A disposable MySQL 8 fixture is provided for a clean-clone run:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-test.txt
+./tests/run_local_mysql_tests.sh
+```
+
+The script starts an isolated MySQL container, runs the API and concurrency integration tests plus the remaining test suite, and removes the database container and volume on exit. It uses port `33306` by default; set `CHRONICNERD_TEST_MYSQL_PORT` if that port is occupied.
+
+For the browser fixture after the MySQL tests are green:
+
+```bash
+npm ci
+# In separate terminals, with the same DB environment variables:
+python tests/browser_test_server.py
+python -m http.server 18080 --directory dietnerd-website
+npm run test:browser
+```
+
+The browser fixture stubs only the external science APIs. A release claim still requires a separate live OpenAI/PubMed pass with valid credentials.
