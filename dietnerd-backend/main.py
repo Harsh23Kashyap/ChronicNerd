@@ -641,15 +641,7 @@ async def send_update(request_id, data):
         await update_queues[request_id].put(data)
 
 async def query_db_final(query: str):
-   load_dotenv("ATT81274.env")
-   mydb = mysql.connector.connect(
-    host=os.getenv('host'),
-    port=os.getenv('port'),
-    user=os.getenv('user'),
-    password=os.getenv('password'),
-    database=os.getenv('database')
-    )
-
+   mydb = _get_db_connection()
    try:
       mycursor = mydb.cursor()
       sql = "SELECT * FROM question_answer WHERE question = %s"
