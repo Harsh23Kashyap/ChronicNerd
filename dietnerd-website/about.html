@@ -3,71 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>About Us - DietNerd</title>
+    <title>About ChronicNerd - DietNerd</title>
     <link rel="stylesheet" type="text/css" href="about.css">
-    <link href='https://fonts.googleapis.com/css?family=Open+Sans' rel="stylesheet">
-    <style>
-        .toolbar {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-        }
-        .toolbar a {
-            margin-left: 15px;
-            text-decoration: none;
-            color: #333;
-            font-weight: bold;
-        }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="toolbar">
-        <a href="index.html">Home</a>
-        <a href="about.html">About</a>
-        <a href="contact.html">Contact</a>
-    </div>
-    <!-- <div id="ownership">
-        <p>Professor Dennis Shasha @ New York University</p>
-        <p>Shela Wu @ New York University</p>
-        <p>Zubair Yacub @ University of Illinois Urbana Champaign</p>
-    </div> -->
-    <a href="index.html"><img src="assets/dietnerd_logo.png" alt="DietNerd Logo" class="logo"></a>
-    <div id="container">
-        
-        <!-- <h3>About DietNerd</h3> -->
-        
-        <h2>About ChronicNerd</h2>
-        <p style="font-size: 16px;">ChronicNerd is the conversational DietNerd project in the CustomNerd research family. It provides evidence-based diet and nutrition answers while preserving durable user conversations, rolling summaries, follow-up context, and user document uploads. Our mission is to enrich conversations between patients and their medical providers and equip users with useful research context.</p>
-        <p style="font-size: 14px;"><i>* Disclaimer: DietNerd is an exploratory tool designed to enrich your conversations with a registered dietitian or registered dietitian nutritionist, who can then review your profile before providing recommendations. Please be aware that the insights provided by DietNerd may not fully take into consideration all potential medication interactions or pre-existing conditions.<br><a href="https://www.eatright.org/find-a-nutrition-expert" target="_blank">Find a local expert near you.</a></i></p>
-        
-        <h2>How It Works:</h2>
-        <p style="font-size: 16px;">DietNerd answers diet and nutrition-related questions by leveraging peer-reviewed research sourced from PubMed. We invite you to ask questions on various topics, including dietary strategies, nutrition science, and diet-related health outcomes. The system will provide live updates as it processes for you to follow along. Once generated, the output presents users with a comprehensive response alongside in-depth article analyses that is built off full-text articles, when available. By clicking through these article summaries, you will be able to quickly grasp key attributes of each study and access the original articles in PubMed for increased transparency.
-        </p>
-        
-        <h2>Meet Our Team</h2>
-
-        <div class="team-member">
-            <h3>Sanghita Chakraborty</h3>
-            <p>New York University<br>
-            New York, USA</p>
+    <nav class="toolbar" aria-label="Primary navigation">
+        <a class="brand" href="index.html"><img src="assets/dietnerd_logo.png" alt="DietNerd"></a>
+        <div class="nav-links">
+            <a href="index.html">Home</a>
+            <a class="active" href="about.html" aria-current="page">About</a>
+            <a href="contact.html">Contact</a>
         </div>
+    </nav>
 
-        <div class="team-member">
-            <h3>Harsh Kashyap</h3>
-            <p>Thapar Institute of Engineering and Technology<br>
-            Patiala, India</p>
-        </div>
+    <main>
+        <section class="about-hero">
+            <div class="hero-copy">
+                <span class="eyebrow">About ChronicNerd</span>
+                <h1>Research context for<br><em>better health conversations.</em></h1>
+                <p>ChronicNerd is the conversational DietNerd project in the CustomNerd research family. It provides evidence-based diet and nutrition answers while preserving durable conversations, rolling summaries, follow-up context, and user document uploads.</p>
+            </div>
+            <div class="evidence-mark" aria-hidden="true">
+                <div class="orbit orbit-one"></div>
+                <div class="orbit orbit-two"></div>
+                <div class="mark-core"><span>Evidence</span><strong>made clear</strong></div>
+                <i class="node node-one"></i><i class="node node-two"></i><i class="node node-three"></i>
+            </div>
+        </section>
 
-        <div class="team-member">
-            <h3>Professor Dennis Shasha</h3>
-            <p>Department of Computer Science<br>
-            Courant Institute of Mathematical Sciences<br>
-            New York University, New York, USA</p>
-        </div>
+        <aside class="disclaimer">
+            <strong>Research companion, not medical advice.</strong>
+            DietNerd is an exploratory tool designed to enrich conversations with a registered dietitian or registered dietitian nutritionist. It may not account for every medication interaction or pre-existing condition.
+            <a href="https://www.eatright.org/find-a-nutrition-expert" target="_blank" rel="noopener">Find a nutrition expert</a>.
+        </aside>
 
-        <div class="navigation">
-            <a href="contact.html" class="contact-link">Contact Us</a>
-        </div>
-    </div>
+        <section class="story-grid" aria-labelledby="how-it-works">
+            <div>
+                <span class="section-kicker">How it works</span>
+                <h2 id="how-it-works">From a question to published evidence.</h2>
+            </div>
+            <p>DietNerd searches peer-reviewed research from PubMed and presents a clear answer alongside article-level analysis. Live progress makes the research path visible, while source summaries help people understand each study and open the original paper for more context.</p>
+        </section>
+
+        <section class="team-section" aria-labelledby="team-title">
+            <span class="section-kicker">The people behind the project</span>
+            <h2 id="team-title">Meet our team</h2>
+            <div class="team-grid">
+                <article class="team-card">
+                    <span class="initials">SC</span>
+                    <h3>Sanghita Chakraborty</h3>
+                    <p>New York University<br>New York, USA</p>
+                </article>
+                <article class="team-card">
+                    <span class="initials">HK</span>
+                    <h3>Harsh Kashyap</h3>
+                    <p>Thapar Institute of Engineering and Technology<br>Patiala, India</p>
+                </article>
+                <article class="team-card">
+                    <span class="initials">DS</span>
+                    <h3>Professor Dennis Shasha</h3>
+                    <p>Department of Computer Science<br>New York University, New York, USA</p>
+                </article>
+            </div>
+        </section>
+    </main>
 </body>
 </html>
