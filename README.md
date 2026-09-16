@@ -1,5 +1,13 @@
 # DietNerd
 
+## About ChronicNerd
+
+ChronicNerd is the conversational DietNerd project: a research assistant for evidence-based diet and nutrition questions, with durable user conversations, rolling summaries, follow-up question rewriting, and document uploads. It is part of the CustomNerd research family and is developed by:
+
+- **Sanghita Chakraborty** - New York University, New York, USA
+- **Harsh Kashyap** - Thapar Institute of Engineering and Technology, Patiala, India
+- **Dennis Shasha** - Department of Computer Science, New York University, New York, USA
+
 ![DietNerd Logo](dietnerd-website/assets/dietnerd_logo.png)
 
 DietNerd (https://dietnerd.org/) is a web-based LLM-powered tool that answers diet and nutrition-related questions by extracting and summarizing information from academic papers sourced from PubMed. Users can ask questions on various topics, including dietary strategies, nutrition science, and health outcomes, and receive detailed, evidence-based responses based on the latest research. It utilizes a unique article search strategy and is built with multiple safety-motivated touchpoints, including a safety analysis that evaluates the pros, cons, and risks of the topics in question.
